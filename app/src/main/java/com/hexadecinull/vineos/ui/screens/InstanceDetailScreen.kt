@@ -6,6 +6,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -126,6 +127,12 @@ fun InstanceDetailScreen(
                         Text("Launch")
                     }
                 } else {
+                    // Reopens the running guest's screen; launching again would restart it
+                    Button(onClick = { onLaunch(instance.id) }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Open")
+                    }
                     OutlinedButton(onClick = { vm.stop(instance) }, modifier = Modifier.weight(1f)) {
                         Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))

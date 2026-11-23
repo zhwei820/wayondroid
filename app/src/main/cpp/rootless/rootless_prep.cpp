@@ -196,8 +196,10 @@ void put_int(std::string& out, uint32_t v) {
 } // namespace
 
 // The fake eth0's static configuration, in IpConfigStore's format:
-// EthernetTracker brings eth0 up with it, no DHCP needed.
-std::string ethernet_ipconfig() {
+// EthernetTracker brings eth0 up with it, no DHCP needed. DNS defaults to
+// public resolvers, which can be slow or lossy from where the phone is:
+// the app passes the phone's own servers on each start.
+std::string ethernet_ipconfig(const std::vector<std::string>& dns_servers) {
     std::string out;
     put_int(out, 3);
     put_utf(out, "ipAssignment");
@@ -209,7 +211,8 @@ std::string ethernet_ipconfig() {
     put_int(out, 0); // default route
     put_int(out, 1);
     put_utf(out, "10.0.2.2");
-    for (const char* dns : {"8.8.8.8", "1.1.1.1"}) {
+    static const std::vector<std::string> fallback = {"8.8.8.8", "1.1.1.1"};
+    for (const std::string& dns : dns_servers.empty() ? fallback : dns_servers) {
         put_utf(out, "dns");
         put_utf(out, dns);
     }
@@ -522,7 +525,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // Read from the tethering apex's dir, migrated from the legacy one
     for (const char* dir : {"/misc/ethernet", "/misc/apexdata/com.android.tethering/misc/ethernet"}) {
         const std::string d = l.data + dir;
-        if (!mkdirs_or_fail(d, error) || !write_mode(d + "/ipconfig.txt", ethernet_ipconfig(), 0644, error)) return false;
+        if (!mkdirs_or_fail(d, error) || !write_mode(d + "/ipconfig.txt", ethernet_ipconfig(o.dns), 0644, error)) return false;
     }
 
     // libbinder access()es the driver before opening it

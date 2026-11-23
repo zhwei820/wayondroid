@@ -40,6 +40,22 @@ int to_int(const std::string& s, int fallback) {
     return (end && *end == '\0') ? (int)v : fallback;
 }
 
+// "a,b,..." numeric IPv4/IPv6 addresses; anything else is dropped (the
+// line ends up in the guest's ipconfig.txt)
+std::vector<std::string> parse_dns_servers(const std::string& v) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= v.size() && out.size() < 4) {
+        const size_t comma = std::min(v.find(',', start), v.size());
+        const std::string a = v.substr(start, comma - start);
+        const bool ok = !a.empty() && a.size() <= 45 &&
+            std::all_of(a.begin(), a.end(), [](char c) { return isxdigit((unsigned char)c) || c == '.' || c == ':'; });
+        if (ok) out.push_back(a);
+        start = comma + 1;
+    }
+    return out;
+}
+
 // "pkg/cls" lines out of cmd package's --components output
 std::vector<std::string> components(const std::string& text) {
     std::vector<std::string> out;
@@ -190,6 +206,7 @@ void RootlessServer::cmd_start(const std::string& id, const std::vector<std::str
         else if (k == "ram_mb") cfg.ram_mb = to_int(v, cfg.ram_mb);
         else if (k == "boot_timeout") cfg.boot_timeout_s = to_int(v, cfg.boot_timeout_s);
         else if (k == "graphics") cfg.gpu = v == "gfxstream";
+        else if (k == "dns") cfg.dns = parse_dns_servers(v);
     }
     if (cfg.width < 64 || cfg.height < 64 || cfg.width > 8192 || cfg.height > 8192) {
         return reply(id, false, "unreasonable display size");

@@ -2,6 +2,7 @@ package com.hexadecinull.vineos.domain
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.os.Build
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
@@ -29,6 +30,7 @@ import com.hexadecinull.vineos.service.VineService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.IOException
+import java.net.Inet4Address
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -69,6 +71,16 @@ class VineVMManager @Inject constructor(
     // Ids stay in the set after a successful delete: the row disappears from the database right after, and ids are never reused
     private val deletingFlow = MutableStateFlow<Set<String>>(emptySet())
     val deletingInstances: StateFlow<Set<String>> = deletingFlow.asStateFlow()
+
+    // The guest's traffic leaves through the app's own sockets, so the phone's resolvers (often the router) answer it fastest.
+    // IPv4 first; link-local ones need a scope the guest's eth0 does not have.
+    private fun hostDnsServers(): List<String> = runCatching {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val servers = cm.getLinkProperties(cm.activeNetwork)?.dnsServers.orEmpty()
+            .filter { !it.isLinkLocalAddress && !it.isLoopbackAddress && !it.isAnyLocalAddress }
+            .sortedBy { if (it is Inet4Address) 0 else 1 }
+        servers.mapNotNull { it.hostAddress?.substringBefore('%') }.distinct().take(4)
+    }.getOrDefault(emptyList())
 
     // Same filesystem as the instances, so the move is a rename. Declared before init, which empties it.
     private val trashDir = File(context.filesDir, "trash")
@@ -163,6 +175,7 @@ class VineVMManager @Inject constructor(
             "refresh=${instance.refreshHz}",
             "network=${if (prefs.guestNetwork.first()) "nat" else "none"}",
             "graphics=${if (prefs.gpuAcceleration.first()) "gfxstream" else "cpu"}",
+            "dns=${hostDnsServers().joinToString(",")}",
             "qemu32=${if (needs32) 1 else 0}",
             timeoutMs = 120_000,
         )

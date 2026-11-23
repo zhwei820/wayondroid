@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -35,6 +36,7 @@ fun InstanceCard(
     onDeleteClick: (VMInstance) -> Unit,
     modifier: Modifier = Modifier,
     isDeleting: Boolean = false,
+    onOpenClick: (VMInstance) -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
@@ -139,20 +141,36 @@ fun InstanceCard(
                                 )
                             }
                         }
-                        VMStatus.RUNNING, VMStatus.BOOTING -> {
-                            FilledIconButton(
-                                onClick = { onStopClick(instance) },
-                                modifier = Modifier.size(40.dp),
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer
-                                )
-                            ) {
-                                Icon(
-                                    Icons.Filled.Stop,
-                                    contentDescription = "Stop ${instance.name}",
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.size(20.dp)
-                                )
+                        VMStatus.RUNNING, VMStatus.BOOTING, VMStatus.PAUSED -> {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                FilledIconButton(
+                                    onClick = { onOpenClick(instance) },
+                                    modifier = Modifier.size(40.dp),
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.OpenInNew,
+                                        contentDescription = "Open ${instance.name}",
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                FilledIconButton(
+                                    onClick = { onStopClick(instance) },
+                                    modifier = Modifier.size(40.dp),
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.errorContainer
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Stop,
+                                        contentDescription = "Stop ${instance.name}",
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
                         else -> Spacer(Modifier.size(40.dp))

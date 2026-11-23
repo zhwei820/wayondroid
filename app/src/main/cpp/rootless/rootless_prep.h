@@ -30,6 +30,7 @@ struct PrepOptions {
     bool host_has_32bit = false;
     bool gpu = false;       // render through vine_kumquat (gfxstream)
     int ram_mb = 0;         // vine_lmkd's budget for the guest's apps, 0: none
+    std::vector<std::string> dns; // eth0's DNS servers, empty: public ones
 };
 
 // Extracts system.img (and vendor.img into /vendor) unless the rootfs

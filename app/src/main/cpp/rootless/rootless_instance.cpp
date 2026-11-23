@@ -285,6 +285,7 @@ bool Instance::start(std::string* error) {
         o.host_has_32bit = cfg_.host_has_32bit;
         o.gpu = cfg_.gpu;
         o.ram_mb = cfg_.ram_mb;
+        o.dns = cfg_.dns;
         std::string why;
         const bool ok = extract_rootfs(layout_, &why) && prepare_rootfs(layout_, o, &why);
         if (!ok) fprintf(stderr, "%s\n", why.c_str());

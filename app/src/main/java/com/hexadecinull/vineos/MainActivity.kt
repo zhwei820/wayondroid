@@ -170,6 +170,7 @@ fun WayondroidApp(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit
                     onCreateInstance = { navController.navigate(Screen.ROMs.route) },
                     modifier = Modifier.fillMaxSize(),
                     deletingIds = uiState.deletingIds,
+                    onOpenInstance = { navController.navigate(Screen.VMDisplay.createRoute(it.id)) },
                 )
             }
 
