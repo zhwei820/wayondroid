@@ -322,6 +322,13 @@ extern size_t tawcroot_guest_exe_path_len;
  * the guest's requested binary path is known. Truncates silently if
  * the path is longer than the buffer. */
 void tawcroot_set_guest_exe_path(const char *path);
+/* The same, for a path that is already canonical */
+void tawcroot_set_guest_exe_path_verbatim(const char *path);
+
+/* An absolute guest path with its symlinks resolved in the guest view and
+ * its mount points kept, as the kernel's d_path names a file: the length
+ * written to out[cap], or -1. */
+long tawcroot_guest_realpath(const char *path, char *out, size_t cap);
 
 /* Host-side view of /proc/self/exe at production init: the absolute
  * filesystem path of `libtawcroot.so` itself (the loader binary).

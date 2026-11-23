@@ -62,6 +62,77 @@ size_t tawcroot_guest_exe_path_len      = 0;
 char   tawcroot_self_host_path[4096]    = {0};
 size_t tawcroot_self_host_path_len      = 0;
 
+/* The guest path as the kernel's d_path would name it: symlinks resolved
+ * component by component in the guest view, mount points kept. A bind's
+ * dst stays the dst even when its src lies inside the rootfs (flattened
+ * APEXes: /apex/<name> bound from /system/apex/<name>); translating to
+ * the host and back would name the src. The length, or -1. */
+long tawcroot_guest_realpath(const char *path, char *out, size_t cap)
+{
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	const size_t S = TAWCROOT_PATH_SCRATCH_SIZE;
+	if (!scratch || path[0] != '/' || cap < 2) return -1;
+	char *rest = scratch->buf[0], *joined = scratch->buf[1];
+	char *suffix = scratch->buf[2], *target = scratch->buf[3];
+	if (tawc_str_copy(rest, S, path) < 0) return -1;
+	size_t olen = 0, i = 0;
+	int links = 0;
+	out[0] = 0;
+	while (rest[i]) {
+		while (rest[i] == '/') i++;
+		if (!rest[i]) break;
+		size_t j = i;
+		while (rest[j] && rest[j] != '/') j++;
+		const size_t n = j - i;
+		if (n == 1 && rest[i] == '.') {
+			i = j;
+			continue;
+		}
+		if (n == 2 && rest[i] == '.' && rest[i + 1] == '.') {
+			while (olen && out[olen - 1] != '/') olen--;
+			if (olen) olen--;
+			out[olen] = 0;
+			i = j;
+			continue;
+		}
+		if (olen + 1 + n + 1 > cap) return -1;
+		out[olen] = '/';
+		memcpy(out + olen + 1, rest + i, n);
+		out[olen + 1 + n] = 0;
+		tawcroot_path_result r = tawcroot_path_translate(
+			out, suffix, S, TAWCROOT_PATH_NOFOLLOW, TAWCROOT_PATH_INTENT_READ);
+		long tl = -1;
+		if (r.err == 0 && suffix[0])
+			tl = tawc_readlinkat(r.base_fd, suffix, target, S - 1);
+		if (tl > 0) {
+			const size_t remain = tawc_strlen(rest + j);
+			if (++links > 40 || (size_t)tl + remain + 1 > S) return -1;
+			memcpy(joined, target, (size_t)tl);
+			memcpy(joined + tl, rest + j, remain + 1);
+			memcpy(rest, joined, (size_t)tl + remain + 1);
+			if (target[0] == '/') olen = 0;
+			out[olen] = 0;
+			i = 0;
+			continue;
+		}
+		olen += 1 + n;
+		i = j;
+	}
+	if (!olen) {
+		out[0] = '/';
+		out[1] = 0;
+		olen = 1;
+	}
+	return (long)olen;
+}
+
+void tawcroot_set_guest_exe_path_verbatim(const char *path)
+{
+	long n = tawc_str_copy(tawcroot_guest_exe_path,
+			       sizeof tawcroot_guest_exe_path, path);
+	tawcroot_guest_exe_path_len = n < 0 ? 0 : (size_t)n;
+}
+
 void tawcroot_set_guest_exe_path(const char *path)
 {
 	if (!path) {
@@ -70,35 +141,18 @@ void tawcroot_set_guest_exe_path(const char *path)
 		return;
 	}
 
-	/* Canonicalize through the rootfs symlink view so /proc/self/exe
-	 * synthesis returns what the kernel would have under a real chroot:
-	 * the post-symlink real-path of the executable. Without this,
-	 * $ORIGIN-rooted RPATH/RUNPATH lookups break when the exec target
-	 * goes through a symlink — e.g. Firefox launched via /usr/sbin/firefox
-	 * (→ /usr/bin/firefox → /usr/lib/firefox/firefox) would have $ORIGIN
-	 * resolve to /usr/sbin and fail to dlopen libxul.so ("Couldn't load
-	 * XPCOM"). Only applies when the resolved path stays in the rootfs
-	 * view (base_fd == rootfs_fd); paths that route through a bind
-	 * fall through to verbatim because the translator's suffix is
-	 * relative to the bind src, not guest-absolute, and reconstructing
-	 * the guest path from base_fd matters too little to justify the
-	 * extra plumbing — exec'd binaries live in the rootfs proper in
-	 * every flow we care about. */
+	/* What the kernel would show under a real chroot: the post-symlink
+	 * path of the executable. Without it, $ORIGIN-rooted RPATH/RUNPATH
+	 * lookups break when the exec target goes through a symlink (Firefox
+	 * via /usr/sbin/firefox -> /usr/lib/firefox/firefox could not load
+	 * libxul.so). Mount points stay as named: bionic's linker picks
+	 * /linkerconfig/<apex>/ld.config.txt only for /apex/<name>/bin/
+	 * paths, and dex2oat failed to link through /system/apex/. */
 	if (tawcroot_rootfs_fd >= 0) {
-		TAWCROOT_PATH_SCRATCH_AUTO(scratch);
-		char *suffix = scratch->buf[0];
-		tawcroot_path_result r = tawcroot_path_translate(
-			path, suffix, TAWCROOT_PATH_SCRATCH_SIZE,
-			TAWCROOT_PATH_FOLLOW, TAWCROOT_PATH_INTENT_READ);
-		if (r.err == 0 && r.base_fd == tawcroot_rootfs_fd) {
-			size_t pos = 0;
-			(void)tawc_str_append(tawcroot_guest_exe_path,
-					      sizeof tawcroot_guest_exe_path,
-					      &pos, "/");
-			(void)tawc_str_append(tawcroot_guest_exe_path,
-					      sizeof tawcroot_guest_exe_path,
-					      &pos, suffix);
-			tawcroot_guest_exe_path_len = pos;
+		long n = tawcroot_guest_realpath(path, tawcroot_guest_exe_path,
+					sizeof tawcroot_guest_exe_path);
+		if (n > 0) {
+			tawcroot_guest_exe_path_len = (size_t)n;
 			return;
 		}
 	}

@@ -541,7 +541,11 @@ void tawcroot_loader_exec_child(int state_fd, const char *platform)
 		 * this exec): restore alongside the rest of the view. */
 		tawcroot_root_ro = (int)st.root_ro;
 
-		if (st.guest_exe) tawcroot_set_guest_exe_path(st.guest_exe);
+		/* guest_exe is already canonical (the exec handler resolved it
+		 * with the parent's view): resolving again here, before this
+		 * process has synced the session's mounts, would follow a
+		 * rootfs symlink a mount covers (/apex/<name>) */
+		if (st.guest_exe) tawcroot_set_guest_exe_path_verbatim(st.guest_exe);
 		else              tawcroot_set_guest_exe_path(st.path);
 	}
 

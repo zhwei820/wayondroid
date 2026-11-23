@@ -125,6 +125,26 @@ const char kCheckDisplay[] =
     "log -p w -t vine \"display HAL not registered in 20 s, killing hwcomposer $pid\"\n"
     "kill -9 $pid\n";
 
+// Network validation probes Google by default, unreachable from where
+// many phones are: eth0 stays PARTIAL_CONNECTIVITY, never VALIDATED, and
+// DownloadManager's jobs (which need a validated network) wait forever.
+// Probe vendor generate_204 endpoints that answer from China instead.
+// NetworkMonitor reads the URLs once, when the network comes up, and keeps
+// them: write them as soon as SettingsProvider answers, seconds before
+// eth0's network exists (a new instance's first boot included). As root:
+// `cmd settings` writes as com.android.shell, which uid 1000 fails to own.
+const char kCaptivePortalUrls[] =
+    "#!/system/bin/sh\n"
+    "i=0\n"
+    "until cmd settings put global captive_portal_https_url https://connect.rom.miui.com/generate_204 "
+    "2>/dev/null; do\n"
+    "    i=$((i + 1)); [ $i -lt 300 ] || exit 1\n"
+    "    sleep 0.2\n"
+    "done\n"
+    "cmd settings put global captive_portal_http_url http://connectivitycheck.platform.hicloud.com/generate_204\n"
+    "cmd settings put global captive_portal_fallback_url http://wifi.vivo.com.cn/generate_204\n"
+    "cmd settings put global captive_portal_other_fallback_urls http://conn1.oppomobile.com/generate_204\n";
+
 std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
     std::string rc =
         // lmkd needs PSI or memcg, both closed to apps: vine_lmkd kills
@@ -185,21 +205,10 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
         "    write /run/user/1000/boot_completed 1\n"
-        // Network validation probes Google by default, unreachable from
-        // where many phones are: eth0 stays PARTIAL_CONNECTIVITY, never
-        // VALIDATED, and DownloadManager's jobs (which need a validated
-        // network) wait forever. Probe vendor generate_204 endpoints that
-        // answer from China. Settings persist; the first boot re-probes
-        // with them on NetworkMonitor's next retry. As root: `cmd settings`
-        // writes as com.android.shell, which uid 1000 fails to own (exit 255).
-        "    exec_background - root root -- /system/bin/cmd settings put global captive_portal_https_url "
-        "https://connect.rom.miui.com/generate_204\n"
-        "    exec_background - root root -- /system/bin/cmd settings put global captive_portal_http_url "
-        "http://connectivitycheck.platform.hicloud.com/generate_204\n"
-        "    exec_background - root root -- /system/bin/cmd settings put global captive_portal_fallback_url "
-        "http://wifi.vivo.com.cn/generate_204\n"
-        "    exec_background - root root -- /system/bin/cmd settings put global captive_portal_other_fallback_urls "
-        "http://conn1.oppomobile.com/generate_204\n"
+        "\n"
+        // see kCaptivePortalUrls
+        "on property:init.svc.zygote=running\n"
+        "    exec_background - root root -- /system/bin/sh /product/etc/vine/captive_portal_urls.sh\n"
         "\n"
         // system_server died and zygote with it: see kReapOrphans
         "on property:init.svc.zygote=restarting\n"
@@ -207,7 +216,18 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         "\n"
         // see kCheckDisplay
         "on property:init.svc.vendor.hwcomposer-2-1=running\n"
-        "    exec_background - root root -- /system/bin/sh /product/etc/vine/check_display.sh\n";
+        "    exec_background - root root -- /system/bin/sh /product/etc/vine/check_display.sh\n"
+        "\n"
+        // A shell inside init's session (mounts, linker namespaces) for
+        // debugging: the engine's exec channel runs outside it, where
+        // APEX binaries do not link. `setprop ctl.start vine_debug` runs
+        // /data/local/tmp/vine_debug.sh as root.
+        "service vine_debug /system/bin/sh /data/local/tmp/vine_debug.sh\n"
+        "    user root\n"
+        "    group root\n"
+        "    seclabel u:r:su:s0\n"
+        "    disabled\n"
+        "    oneshot\n";
     if (own_audio_hal) {
         // The image's audio HAL service is 32-bit only; its 64-bit
         // implementations are served by our passthrough service
@@ -709,7 +729,8 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu, o.ram_mb), 0644, error)) return false;
     const std::string product_vine = R + "/system/product/etc/vine";
     if (!mkdirs_or_fail(product_vine, error) || !write_mode(product_vine + "/reap_orphans.sh", kReapOrphans, 0755, error) ||
-        !write_mode(product_vine + "/check_display.sh", kCheckDisplay, 0755, error))
+        !write_mode(product_vine + "/check_display.sh", kCheckDisplay, 0755, error) ||
+        !write_mode(product_vine + "/captive_portal_urls.sh", kCaptivePortalUrls, 0755, error))
         return false;
     if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi, o.gpu), 0644, error)) return false;
     if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||

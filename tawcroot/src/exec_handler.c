@@ -217,8 +217,14 @@ static long prepare(const char *path, int argc,
 		/* /proc/self/exe names the opened file, not the source fd path
 		 * that may disappear at exec. AT_EXECFN still uses `path`. */
 		char *executable_path = scratch->executable_path;
-		long resolved = tawcroot_fd_to_guest_abs(*executable_fd,
-			executable_path, sizeof scratch->executable_path);
+		/* By the path, so a mount point stays one (/apex/<name> bound
+		 * from /system/apex/<name>); the fd's host path names the src */
+		long resolved = path[0] == '/'
+			? tawcroot_guest_realpath(path, executable_path, sizeof scratch->executable_path)
+			: -1;
+		if (resolved < 0)
+			resolved = tawcroot_fd_to_guest_abs(*executable_fd,
+				executable_path, sizeof scratch->executable_path);
 		/* $ORIGIN belongs to the executable's guest name, not the
 		 * directory containing the emulated hardlink's backing inode. */
 		char token[TAWCROOT_LINK_TOKEN_MAX];
