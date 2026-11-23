@@ -1,0 +1,22 @@
+From: wayondroid
+Origin: own
+
+On Android, warnings and errors also go to stderr. ColorOS drops an
+app's logcat lines past a budget, which the Vulkan loader spends at
+startup, and every later renderer error was lost.
+
+--- a/common/logging/logging.cpp
++++ b/common/logging/logging.cpp
+@@ -60,6 +60,12 @@
+                 break;
+         }
+         __android_log_print(priority, "GFXSTREAM", "%s\n", formatted.c_str());
++        // Some vendors cap an app's logcat output and drop the rest; keep
++        // problems in the process's own stderr (vine_kumquat.log) too
++        if (level <= LogLevel::kWarning) {
++            fprintf(stderr, "%s\n", formatted.c_str());
++            fflush(stderr);
++        }
+ #else
+         FILE* f;
+         switch (level) {
