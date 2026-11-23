@@ -29,7 +29,11 @@ docker run --rm -it --platform linux/amd64 \
 ```
 
 
-docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -v ~/docker-certs:/certificates:ro -v "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash
+colima stop                                                                                                                                                                                                    
+colima start --cpu 6 --memory 10
+
+
+docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -e JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts -Djavax.net.ssl.trustStorePassword=changeit" -e ANDROID_HOME=/root/Android/Sdk -v ~/docker-certs:/certificates:ro -v wayondroid-sdk:/root/Android -v wayondroid-gradle:/root/.gradle -v "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash
 
 
 注意：仓库根目录的 `local.properties` 里如果有宿主机的 `sdk.dir`（如 `/Users/...`），它优先于
@@ -47,8 +51,10 @@ docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -v ~/docker-
 全新的 Linux 环境可以用 CI 的脚本装 SDK 组件：
 
 ```sh
-export ANDROID_HOME=$HOME/Android/Sdk
-ANDROID_SDK_NATIVE=true ANDROID_NDK_VERSION=28.2.13676358 scripts/ci/setup-android-sdk.sh
+                                                                                                                   
+  sed -i 's#^sdk.dir=.*#sdk.dir=/root/Android/Sdk#' local.properties                                                  
+  ANDROID_SDK_NATIVE=true ANDROID_NDK_VERSION=28.2.13676358 scripts/ci/setup-android-sdk.sh
+                             
 ```
 
 不传 `ANDROID_NDK_VERSION` 时脚本不装 NDK，Gradle 会在构建时自动下载 AGP 的默认版本（CI 就是这样）。
@@ -58,7 +64,8 @@ ANDROID_SDK_NATIVE=true ANDROID_NDK_VERSION=28.2.13676358 scripts/ci/setup-andro
 ### 构建 APK
 
 ```sh
-./gradlew :app:assembleDebug
+  ./gradlew :app:assembleDebug --no-watch-fs                                                                                                                                                                     
+
 ```
 
 产物：`app/build/outputs/apk/debug/app-debug.apk`，包名 `com.hexadecinull.vineos.debug`。
@@ -70,7 +77,7 @@ Gradle 会先构建 tawcroot 和 binderd，放进 `app/src/main/jniLibs/<abi>/`
 Release 构建：
 
 ```sh
-./gradlew :app:assembleRelease
+./gradlew :app:assembleRelease --no-watch-fs
 ```
 
 
