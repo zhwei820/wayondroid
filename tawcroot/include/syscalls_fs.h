@@ -18,6 +18,17 @@ void tawcroot_fs_register(void);
  * fds, which RO binds never grant). */
 tawcroot_path_intent tawcroot_openat_intent(int flags);
 
+struct stat;
+
+/* Build a stat for an fd whose fstat the LSM denies (EACCES) from the
+ * text of its /proc/self/fdinfo entry: a regular file with the fdinfo
+ * inode, mount id as st_dev and permission bits from the access mode.
+ * Some Android builds let apps open /sys/kernel/tracing/trace_marker for
+ * writing but not getattr it, and the zygote aborts its fork when any
+ * open fd fails fstat. Returns 0, or -EACCES when `fdinfo` lacks the
+ * flags or ino line. */
+long tawcroot_stat_from_fdinfo(const char *fdinfo, struct stat *out);
+
 struct statx;
 
 /* STATX_MNT_ID emulation for pre-5.8 kernels (see syscalls_fs.c for

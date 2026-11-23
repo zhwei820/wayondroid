@@ -2061,6 +2061,65 @@ static long handle_statx(const tawcroot_syscall_args *args, ucontext_t *uc)
 	return finish_statx_direct(rv, out);
 }
 
+static int fdinfo_field(const char *buf, const char *key, int base,
+			unsigned long *val)
+{
+	size_t kl = 0;
+	while (key[kl]) kl++;
+	for (const char *p = buf; *p; ) {
+		if ((p == buf || p[-1] == '\n') && tawc_starts_with(p, key)) {
+			p += kl;
+			while (*p == ' ' || *p == '\t') p++;
+			unsigned long v = 0;
+			int digits = 0;
+			for (; *p >= '0' && *p < '0' + (base == 8 ? 8 : 10); p++, digits++)
+				v = v * (unsigned long)base + (unsigned long)(*p - '0');
+			if (!digits) return 0;
+			*val = v;
+			return 1;
+		}
+		while (*p && *p != '\n') p++;
+		if (*p) p++;
+	}
+	return 0;
+}
+
+long tawcroot_stat_from_fdinfo(const char *fdinfo, struct stat *out)
+{
+	unsigned long flags, ino, mnt_id = 0;
+	if (!fdinfo_field(fdinfo, "flags:", 8, &flags) ||
+	    !fdinfo_field(fdinfo, "ino:", 10, &ino))
+		return TAWC_EACCES;
+	(void)fdinfo_field(fdinfo, "mnt_id:", 10, &mnt_id);
+	static const unsigned int perm[4] = { 0444, 0222, 0666, 0 };
+	memset(out, 0, sizeof *out);
+	out->st_dev = (__typeof__(out->st_dev))mnt_id;
+	out->st_ino = (__typeof__(out->st_ino))ino;
+	out->st_mode = S_IFREG | perm[flags & 3];
+	out->st_nlink = 1;
+	out->st_blksize = 4096;
+	return 0;
+}
+
+static long fstat_from_fdinfo(int fd, struct stat *out)
+{
+	char path[40];
+	size_t pos = 0;
+	if (tawc_str_append(path, sizeof path, &pos, "/proc/self/fdinfo/") ||
+	    tawc_str_append_dec(path, sizeof path, &pos, fd))
+		return TAWC_EACCES;
+	long ifd = TAWC_RAW(TAWC_SYS_openat, AT_FDCWD, (long)path,
+			    O_RDONLY | O_CLOEXEC, 0, 0, 0);
+	if (ifd < 0) return TAWC_EACCES;
+	char buf[256];
+	long n = TAWC_RAW(TAWC_SYS_read, ifd, (long)buf,
+			  (long)(sizeof buf - 1), 0, 0, 0);
+	TAWC_RAW(TAWC_SYS_close, ifd, 0, 0, 0, 0, 0);
+	if (n <= 0) return TAWC_EACCES;
+	buf[n] = 0;
+	return tawcroot_stat_from_fdinfo(buf, out);
+}
+
 /* fstat with fake-root decoration. Without this, fstat(fd) reports the
  * real app uid while stat/fstatat/statx fake uid/gid 0 — programs that
  * compare the two (tar/cpio ownership checks) see an inconsistent
@@ -2073,6 +2132,7 @@ static long handle_fstat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (tawcroot_fd_is_reserved(fd)) return TAWC_EBADF;
 	if (!out) return TAWC_EFAULT;
 	long rv = TAWC_RAW(TAWC_SYS_fstat, fd, (long)out, 0, 0, 0, 0);
+	if (rv == TAWC_EACCES) rv = fstat_from_fdinfo(fd, out);
 	if (rv == 0) {
 		int pad = S_ISSOCK(out->st_mode)
 			? tawcroot_gamepad_fd_slot(fd) : -1;
