@@ -805,6 +805,15 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         !write_mode(product_vine + "/captive_portal_urls.sh", kCaptivePortalUrls, 0755, error))
         return false;
     if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi, o.gpu), 0644, error)) return false;
+    // gralloc reads ro.vendor.vine.gpu in every app, and tawcroot denies
+    // apps the vendor_default_prop area that "ro.vendor." falls in
+    const std::string vendor_prop_contexts = R + "/vendor/etc/selinux/vendor_property_contexts";
+    if (const auto text = read_file(vendor_prop_contexts); text && text->find("\nro.vendor.vine.gpu ") == std::string::npos &&
+        !write_mode(vendor_prop_contexts,
+                    *text + (text->empty() || text->back() == '\n' ? "" : "\n") +
+                        "ro.vendor.vine.gpu u:object_r:exported_default_prop:s0 exact bool\n",
+                    0644, error))
+        return false;
     if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))
         return false;

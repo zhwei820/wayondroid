@@ -16,11 +16,18 @@
  *     without doing anything either: system_server restarting resets
  *     vold, which unmounts every volume and mounts it again, and a real
  *     unmount would take the rc's binds away for good.
- * Apps reach the files through the binds instead of the daemon. */
+ * Apps reach the files through the binds instead of the daemon.
+ *
+ * Quota project ids, project inheritance and default ACLs on app dirs
+ * succeed when the host refuses them (an app may not set them): without
+ * sdcardfs vold sets all three in setupAppDir, and one failure fails the
+ * whole call, so Android/data/<pkg>/cache, which only vold creates, never
+ * appears. Nothing enforces external storage quotas here anyway. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fs.h>
 #include <linux/fuse.h>
 #include <stdarg.h>
 #include <string.h>
@@ -121,4 +128,41 @@ EXPORT int umount(const char *target)
     if (is_storage_target(target)) return 0;
     if (!real) real = (int (*)(const char *))dlsym(RTLD_NEXT, "umount");
     return real(target);
+}
+
+static int refused(int e) { return e == EACCES || e == EPERM || e == ENOTTY || e == EOPNOTSUPP; }
+
+EXPORT int ioctl(int fd, int request, ...)
+{
+    static int (*real)(int, int, ...);
+    va_list ap;
+    va_start(ap, request);
+    void *arg = va_arg(ap, void *);
+    va_end(ap);
+    if (!real) real = (int (*)(int, int, ...))dlsym(RTLD_NEXT, "ioctl");
+    int r = real(fd, request, arg);
+    if (r == 0 || !arg || !refused(errno)) return r;
+    switch ((unsigned)request) {
+    case (unsigned)FS_IOC_FSGETXATTR:
+        memset(arg, 0, sizeof(struct fsxattr));
+        return 0;
+    case (unsigned)FS_IOC_GETFLAGS:
+        /* the kernel reads and writes an int, whatever the macro says */
+        *(int *)arg = 0;
+        return 0;
+    case (unsigned)FS_IOC_FSSETXATTR:
+    case (unsigned)FS_IOC_SETFLAGS:
+        return 0;
+    }
+    return r;
+}
+
+static int is_default_acl(const char *name) { return name && !strcmp(name, "system.posix_acl_default"); }
+
+EXPORT int setxattr(const char *path, const char *name, const void *value, size_t size, int flags)
+{
+    static int (*real)(const char *, const char *, const void *, size_t, int);
+    if (!real) real = (int (*)(const char *, const char *, const void *, size_t, int))dlsym(RTLD_NEXT, "setxattr");
+    int r = real(path, name, value, size, flags);
+    return r != 0 && is_default_acl(name) && refused(errno) ? 0 : r;
 }
