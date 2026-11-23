@@ -49,6 +49,9 @@ struct statx;
 #define TAWCROOT_PROC_SHADOW_KIND_MAX   14
 int tawcroot_proc_shadow_classify(const char *path);
 
+/* A property area file an app's SELinux domain could not map: EACCES */
+int tawcroot_prop_area_denied_to_app(const char *path);
+
 /* Synthesize the shadow fd for a classified kind. Returns the new fd or
  * a synthesizer -errno; TAWCROOT_PROC_SHADOW_NONE is a caller bug and
  * answers -EINVAL. */

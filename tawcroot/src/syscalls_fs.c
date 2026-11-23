@@ -276,6 +276,7 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	char *path = scratch->buf[0];
 	long fe = fetch_guest_path(scratch, 0, gpath);
 	if (fe) return fe;
+	if (tawcroot_prop_area_denied_to_app(path)) return TAWC_EACCES;
 	long gamepad = tawcroot_gamepad_open(dirfd, path, flags);
 	if (gamepad != TAWC_ENOSYS) return gamepad;
 	long binder = tawcroot_binder_open(dirfd, path, flags);

@@ -767,6 +767,74 @@ static int guest_is_app(void)
 	return tawcroot_identity_euid() % 100000 >= 10000;
 }
 
+/* Property areas: an app's SELinux domain may map only some of
+ * /dev/__properties__. Risk SDKs open every area and count the ones that
+ * open: all of them reads as SELinux off. The allowed contexts are what
+ * an app domain could open on an Android 16 phone (run-as, which grants
+ * no more property access than untrusted_app), plus the areas every
+ * process maps.
+ * Anything else, newer or vendor contexts included, is denied, as an
+ * unlisted context is under a real policy. */
+int tawcroot_prop_area_denied_to_app(const char *path)
+{
+	static const char prefix[] = "/dev/__properties__/";
+	static const char *const allowed[] = {
+		"aaudio_config_prop", "adbd_config_prop", "apexd_select_prop",
+		"arm64_memtag_prop", "audio_prop", "binder_cache_bluetooth_server_prop",
+		"binder_cache_system_server_prop", "binder_cache_telephony_server_prop",
+		"bluetooth_config_prop", "boot_status_prop", "bootloader_prop",
+		"bq_config_prop", "build_odm_prop", "build_prop", "build_vendor_prop",
+		"camera2_extensions_prop", "camera_calibration_prop", "camera_config_prop",
+		"camerax_extensions_prop", "codec2_config_prop", "config_prop",
+		"cppreopt_prop", "dalvik_config_prop", "dalvik_prop", "dalvik_runtime_prop",
+		"dck_prop", "debug_prop", "debuggerd_prop", "default_prop",
+		"device_config_media_native_prop", "device_config_nnapi_native_prop",
+		"device_config_runtime_native_boot_prop",
+		"device_config_runtime_native_prop", "dhcp_prop", "dumpstate_prop",
+		"exported3_system_prop", "exported_config_prop", "exported_default_prop",
+		"exported_dumpstate_prop", "exported_pm_prop", "exported_system_prop",
+		"ffs_config_prop", "fingerprint_prop", "framework_status_prop",
+		"graphics_config_prop", "gwp_asan_prop", "hal_instrumentation_prop",
+		"hdmi_config_prop", "heapprofd_prop", "hw_timeout_multiplier_prop",
+		"hwservicemanager_prop", "hypervisor_prop",
+		"init_service_status_private_prop", "init_service_status_prop",
+		"libc_debug_prop", "lmkd_config_prop", "localization_prop", "log_prop",
+		"log_tag_prop", "logd_prop", "media_config_prop", "media_variant_prop",
+		"mediadrm_config_prop", "module_sdkextensions_prop", "net_radio_prop",
+		"nfc_prop", "nnapi_ext_deny_product_prop", "ota_prop",
+		"packagemanager_config_prop", "pan_result_prop", "persist_debug_prop",
+		"persist_wm_debug_prop", "pm_prop", "powerctl_prop",
+		"property_service_version_prop", "radio_control_prop", "radio_prop",
+		"restorecon_prop", "rollback_test_prop", "sendbug_config_prop",
+		"setupwizard_prop", "shell_prop", "soc_prop", "socket_hook_prop",
+		"sqlite_log_prop", "storagemanager_config_prop", "surfaceflinger_color_prop",
+		"surfaceflinger_prop", "system_prop", "system_user_mode_emulation_prop",
+		"systemsound_config_prop", "telephony_config_prop", "telephony_status_prop",
+		"test_harness_prop", "traced_oome_heap_session_count_prop",
+		"usb_config_prop", "usb_control_prop", "usb_prop", "use_memfd_prop",
+		"userdebug_or_eng_prop", "userspace_reboot_config_prop",
+		"userspace_reboot_exported_prop", "userspace_reboot_log_prop",
+		"userspace_reboot_test_prop", "vendor_security_patch_level_prop",
+		"vendor_socket_hook_prop", "vndk_prop", "vold_config_prop", "vold_prop",
+		"vold_status_prop", "vts_config_prop", "vts_status_prop", "wifi_log_prop",
+		"zygote_config_prop", "zygote_wrap_prop",
+	};
+	if (!tawc_starts_with(path, prefix) || !guest_is_app()) return 0;
+	const char *name = path + sizeof prefix - 1;
+	if (tawc_streq(name, "property_info") || tawc_streq(name, "properties_serial")) return 0;
+	if (!tawc_starts_with(name, "u:object_r:")) return 0;
+	const char *ctx = name + 11;
+	size_t n = 0;
+	while (ctx[n] && ctx[n] != ':') n++;
+	if (!tawc_streq(ctx + n, ":s0")) return 0;
+	for (size_t i = 0; i < sizeof allowed / sizeof allowed[0]; i++) {
+		size_t k = 0;
+		while (allowed[i][k] && k < n && allowed[i][k] == ctx[k]) k++;
+		if (k == n && !allowed[i][k]) return 0;
+	}
+	return 1;
+}
+
 static int denied_to_apps(int kind)
 {
 	return (kind == TAWCROOT_PROC_SHADOW_CMDLINE || kind == TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE ||
