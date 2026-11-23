@@ -1,0 +1,36 @@
+From: wayondroid
+Origin: own
+
+A failed resource_create_3d answers the request with an error instead
+of dropping the client connection with it.
+
+--- a/kumquat/server/src/kumquat_gpu/mod.rs
++++ b/kumquat/server/src/kumquat_gpu/mod.rs
+@@ -280,9 +280,25 @@
+ 
+                     let resource_id = kumquat_gpu.allocate_id();
+ 
+-                    kumquat_gpu
++                    // A buffer the host cannot back fails just this
++                    // allocation: the guest reads any reply but
++                    // RESP_RESOURCE_CREATE as an error, and keeps its
++                    // connection (a `?` here would drop it).
++                    if let Err(e) = kumquat_gpu
+                         .rutabaga
+-                        .resource_create_3d(resource_id, resource_create_3d)?;
++                        .resource_create_3d(resource_id, resource_create_3d)
++                    {
++                        error!(
++                            "resource_create_3d {}x{} format {} failed: {:?}",
++                            cmd.width, cmd.height, cmd.format, e
++                        );
++                        let resp = kumquat_gpu_protocol_ctrl_hdr {
++                            type_: KUMQUAT_GPU_PROTOCOL_RESP_NODATA,
++                            ..Default::default()
++                        };
++                        self.stream.write(KumquatGpuProtocolWrite::Cmd(resp))?;
++                        continue;
++                    }
+ 
+                     kumquat_gpu.rutabaga.attach_backing(resource_id, vecs)?;
+                     kumquat_gpu.resources.insert(

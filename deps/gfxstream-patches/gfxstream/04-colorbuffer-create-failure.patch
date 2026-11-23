@@ -1,0 +1,98 @@
+From: wayondroid
+Origin: own
+
+A ColorBuffer the host cannot create fails that resource, not the
+renderer. GFXSTREAM_FATAL aborted vine_kumquat when Adreno could not
+back a 4x4 R8_UNORM buffer in AHB mode, and the instance never booted.
+
+--- a/host/frame_buffer.cpp
++++ b/host/frame_buffer.cpp
+@@ -391,7 +391,7 @@
+     HandleType createColorBufferDeprecated(int width, int height,
+                                            GLenum internalFormat,
+                                            FrameworkFormat frameworkFormat);
+-    void createColorBufferWithResourceHandle(int p_width, int p_height,
++    bool createColorBufferWithResourceHandle(int p_width, int p_height,
+                                              GfxstreamFormat format, HandleType handle);
+     void createColorBufferWithResourceHandleDeprecated(int width, int height,
+                                                        GLenum internalFormat,
+@@ -2120,7 +2120,7 @@
+     return createColorBuffer(width, height, format);
+ }
+ 
+-void FrameBuffer::Impl::createColorBufferWithResourceHandle(int p_width, int p_height,
++bool FrameBuffer::Impl::createColorBufferWithResourceHandle(int p_width, int p_height,
+                                                             GfxstreamFormat format,
+                                                             HandleType handle) {
+     {
+@@ -2134,7 +2134,7 @@
+             GFXSTREAM_FATAL("ColorBuffer:%d already exists!", handle);
+         }
+ 
+-        createColorBufferWithResourceHandleLocked(p_width, p_height, format, handle);
++        return createColorBufferWithResourceHandleLocked(p_width, p_height, format, handle) != 0;
+     }
+ }
+ 
+@@ -2151,7 +2151,7 @@
+         return;
+     }
+     auto format = *formatOpt;
+-    return createColorBufferWithResourceHandle(width, height, format, handle);
++    createColorBufferWithResourceHandle(width, height, format, handle);
+ }
+ 
+ HandleType FrameBuffer::Impl::createColorBufferWithResourceHandleLocked(
+@@ -2161,8 +2161,11 @@
+         ColorBuffer::create(m_emulationGl.get(), m_emulationVk.get(), p_width, p_height,
+                             format, handle, nullptr /*stream*/);
+     if (cb.get() == nullptr) {
+-        GFXSTREAM_FATAL("Failed to create ColorBuffer:%d format:%d with:%d height:%d",
++        // One allocation the host GPU cannot back (an AHB format its
++        // gralloc lacks, say) fails that allocation, not the renderer.
++        GFXSTREAM_ERROR("Failed to create ColorBuffer:%d format:%d with:%d height:%d",
+                         handle, format, p_width, p_height);
++        return 0;
+     }
+ 
+     assert(m_colorbuffers.count(handle) == 0);
+@@ -5116,10 +5119,10 @@
+     return mImpl->createColorBufferDeprecated(width, height, internalFormat, frameworkFormat);
+ }
+ 
+-void FrameBuffer::createColorBufferWithResourceHandle(int width, int height,
++bool FrameBuffer::createColorBufferWithResourceHandle(int width, int height,
+                                                       GfxstreamFormat format,
+                                                       HandleType handle) {
+-    mImpl->createColorBufferWithResourceHandle(width, height, format, handle);
++    return mImpl->createColorBufferWithResourceHandle(width, height, format, handle);
+ }
+ 
+ void FrameBuffer::createColorBufferWithResourceHandleDeprecated(int width, int height,
+--- a/host/frame_buffer.h
++++ b/host/frame_buffer.h
+@@ -149,7 +149,8 @@
+     // Variant of createColorBuffer except with a particular
+     // handle already assigned. This is for use with
+     // virtio-gpu's RESOURCE_CREATE ioctl.
+-    void createColorBufferWithResourceHandle(int p_width, int p_height,
++    // false when the ColorBuffer could not be created.
++    bool createColorBufferWithResourceHandle(int p_width, int p_height,
+                                              GfxstreamFormat format,
+                                              HandleType handle);
+ 
+--- a/host/virtio_gpu_resource.cpp
++++ b/host/virtio_gpu_resource.cpp
+@@ -151,7 +151,11 @@
+         }
+         auto format = *formatOpt;
+ 
+-        FrameBuffer::getFB()->createColorBufferWithResourceHandle(args->width, args->height, format, args->handle);
++        if (!FrameBuffer::getFB()->createColorBufferWithResourceHandle(args->width, args->height,
++                                                                       format, args->handle)) {
++            GFXSTREAM_ERROR("Failed to create resource %u: no ColorBuffer", args->handle);
++            return std::nullopt;
++        }
+         FrameBuffer::getFB()->setGuestManagedColorBufferLifetime(true /* guest manages lifetime */);
+         FrameBuffer::getFB()->openColorBuffer(args->handle);
+     } else {
