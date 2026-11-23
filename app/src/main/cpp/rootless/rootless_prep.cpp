@@ -528,7 +528,12 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
             const std::string product = product_field(key), build = build_field(key);
             const char* set = nullptr;
             std::string made;
-            if (product == "brand") set = id.brand.c_str();
+            // A phone's: risk SDKs (汽水音乐's) block on debuggable or adb-on
+            // builds. The engine's exec channel needs neither.
+            if (key == "ro.debuggable") set = "0";
+            else if (key == "ro.adb.secure") set = "1";
+            else if (key == "persist.sys.usb.config") set = "none";
+            else if (product == "brand") set = id.brand.c_str();
             else if (product == "manufacturer") set = id.manufacturer.c_str();
             else if (product == "model") set = id.model.c_str();
             else if (product == "name") set = id.name.c_str();

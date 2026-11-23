@@ -755,7 +755,9 @@ static long open_proc_cpuinfo_shadow(void)
 }
 
 /* An app (uid 10000+ in any user) sees what an app sees on a phone:
- * /proc/cmdline and selinuxfs's enforce file are denied, and the status
+ * /proc/cmdline, /proc/version, /proc/stat and selinuxfs's enforce file
+ * are denied (risk SDKs read the synthesized "tawcroot" version string
+ * as a tampered device), and the status
  * page says enforcing. The guest's own services keep the permissive view
  * they need: nothing enforces the guest's policy, and their userspace
  * checks (servicemanager, keystore) would deny everything if told
@@ -767,7 +769,8 @@ static int guest_is_app(void)
 
 static int denied_to_apps(int kind)
 {
-	return (kind == TAWCROOT_PROC_SHADOW_CMDLINE || kind == TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE) &&
+	return (kind == TAWCROOT_PROC_SHADOW_CMDLINE || kind == TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE ||
+		kind == TAWCROOT_PROC_SHADOW_VERSION || kind == TAWCROOT_PROC_SHADOW_STAT) &&
 	       guest_is_app();
 }
 
