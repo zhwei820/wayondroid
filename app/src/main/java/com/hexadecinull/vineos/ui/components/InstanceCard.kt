@@ -34,6 +34,7 @@ fun InstanceCard(
     onCardClick: (VMInstance) -> Unit,
     onDeleteClick: (VMInstance) -> Unit,
     modifier: Modifier = Modifier,
+    isDeleting: Boolean = false,
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
@@ -45,6 +46,7 @@ fun InstanceCard(
 
     ElevatedCard(
         onClick = { onCardClick(instance) },
+        enabled = !isDeleting,
         modifier = modifier.fillMaxWidth(),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
         shape = RoundedCornerShape(16.dp),
@@ -101,79 +103,90 @@ fun InstanceCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    StatusChip(status = instance.status, color = statusColor)
+                    if (isDeleting) {
+                        DeletingChip()
+                    } else {
+                        StatusChip(status = instance.status, color = statusColor)
+                    }
                     if (instance.isRooted) SuChip()
                 }
             }
 
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                when (instance.status) {
-                    VMStatus.STOPPED, VMStatus.ERROR -> {
-                        FilledIconButton(
-                            onClick = { onLaunchClick(instance) },
-                            modifier = Modifier.size(40.dp),
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer
-                            )
-                        ) {
-                            Icon(
-                                Icons.Filled.PlayArrow,
-                                contentDescription = "Start ${instance.name}",
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.size(20.dp)
-                            )
+            if (isDeleting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.padding(8.dp).size(24.dp),
+                    strokeWidth = 2.5.dp,
+                )
+            } else {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    when (instance.status) {
+                        VMStatus.STOPPED, VMStatus.ERROR -> {
+                            FilledIconButton(
+                                onClick = { onLaunchClick(instance) },
+                                modifier = Modifier.size(40.dp),
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Filled.PlayArrow,
+                                    contentDescription = "Start ${instance.name}",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
-                    }
-                    VMStatus.RUNNING, VMStatus.BOOTING -> {
-                        FilledIconButton(
-                            onClick = { onStopClick(instance) },
-                            modifier = Modifier.size(40.dp),
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer
-                            )
-                        ) {
-                            Icon(
-                                Icons.Filled.Stop,
-                                contentDescription = "Stop ${instance.name}",
-                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        VMStatus.RUNNING, VMStatus.BOOTING -> {
+                            FilledIconButton(
+                                onClick = { onStopClick(instance) },
+                                modifier = Modifier.size(40.dp),
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Filled.Stop,
+                                    contentDescription = "Stop ${instance.name}",
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
+                        else -> Spacer(Modifier.size(40.dp))
                     }
-                    else -> Spacer(Modifier.size(40.dp))
-                }
 
-                Box {
-                    IconButton(
-                        onClick = { showMenu = true },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            Icons.Filled.MoreVert,
-                            contentDescription = "More options",
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("View Details") },
-                            onClick = {
-                                showMenu = false
-                                onCardClick(instance)
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                            onClick = {
-                                showMenu = false
-                                onDeleteClick(instance)
-                            },
-                            enabled = instance.status == VMStatus.STOPPED
-                        )
+                    Box {
+                        IconButton(
+                            onClick = { showMenu = true },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "More options",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("View Details") },
+                                onClick = {
+                                    showMenu = false
+                                    onCardClick(instance)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    showMenu = false
+                                    onDeleteClick(instance)
+                                },
+                                enabled = instance.status == VMStatus.STOPPED
+                            )
+                        }
                     }
                 }
             }
@@ -189,6 +202,19 @@ private fun StatusChip(status: VMStatus, color: Color) {
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
             style = MaterialTheme.typography.labelSmall,
             color = color,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun DeletingChip() {
+    Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(6.dp)) {
+        Text(
+            text = "Deleting…",
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onErrorContainer,
             fontWeight = FontWeight.SemiBold,
         )
     }

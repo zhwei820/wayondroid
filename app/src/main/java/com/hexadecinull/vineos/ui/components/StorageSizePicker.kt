@@ -1,5 +1,6 @@
 package com.hexadecinull.vineos.ui.components
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.StatFs
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +28,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.hexadecinull.vineos.domain.RamSizing
 import com.hexadecinull.vineos.domain.StorageSizing
 import kotlin.math.roundToInt
 
@@ -36,6 +38,19 @@ fun rememberMaxStorageMb(): Int {
     val context = LocalContext.current
     return remember { StorageSizing.maxMb(freeBytes(context)) }
 }
+
+// Largest RAM budget to offer, based on the phone's total RAM
+@Composable
+fun rememberMaxRamMb(): Int {
+    val context = LocalContext.current
+    return remember { RamSizing.maxMb(totalRamBytes(context)) }
+}
+
+private fun totalRamBytes(context: Context): Long = runCatching {
+    val info = ActivityManager.MemoryInfo()
+    context.getSystemService(ActivityManager::class.java).getMemoryInfo(info)
+    info.totalMem
+}.getOrDefault(0L)
 
 private fun freeBytes(context: Context): Long = runCatching { StatFs(context.filesDir.path).availableBytes }.getOrDefault(0L)
 

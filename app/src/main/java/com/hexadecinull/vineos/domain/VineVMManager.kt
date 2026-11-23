@@ -46,9 +46,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 data class SnapshotEvent(val kind: String, val instanceId: String, val name: String, val ok: Boolean, val message: String)
 
@@ -63,6 +65,14 @@ class VineVMManager @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val statusFlows = ConcurrentHashMap<String, MutableStateFlow<VMStatus>>()
     private val errorFlows = ConcurrentHashMap<String, MutableStateFlow<String?>>()
+
+    // Ids stay in the set after a successful delete: the row disappears from the database right after, and ids are never reused
+    private val deletingFlow = MutableStateFlow<Set<String>>(emptySet())
+    val deletingInstances: StateFlow<Set<String>> = deletingFlow.asStateFlow()
+
+    // Same filesystem as the instances, so the move is a rename. Declared before init, which empties it.
+    private val trashDir = File(context.filesDir, "trash")
+    private val trashLock = Mutex()
     private val pendingLaunch = ConcurrentHashMap<String, String>()
     private val startLocks = ConcurrentHashMap<String, Mutex>()
     private val persistQueue = Channel<Pair<String, VMStatus>>(Channel.UNLIMITED)
@@ -94,6 +104,7 @@ class VineVMManager @Inject constructor(
         scope.launch { for ((id, status) in persistQueue) runCatching { instanceRepo.updateStatus(id, status) } }
         scope.launch { helper.events.collect { onHelperEvent(it, rootless = false) } }
         scope.launch { rootlessHelper.events.collect { onHelperEvent(it, rootless = true) } }
+        scope.launch { emptyTrash() }
     }
 
     // System-as-root images (Waydroid, no ramdisk) boot on the rootless engine, the others need root
@@ -175,13 +186,43 @@ class VineVMManager @Inject constructor(
 
     // Stops the guest, then removes its files. Files made by the root helper need the helper to delete them.
     suspend fun deleteInstanceFiles(instance: VMInstance) {
-        halt(instance.id, force = true)
-        val dir = File(instance.storagePath)
-        if (dir.exists()) dir.deleteRecursively()
-        if (dir.exists() && connectFor(instance.id) == null) helperFor(instance.id).request("rmtree", dir.path, timeoutMs = 120_000)
-        shortcutStore.forgetInstance(instance.id)
-        statusFlows.remove(instance.id)
-        errorFlows.remove(instance.id)
+        deletingFlow.update { it + instance.id }
+        try {
+            halt(instance.id, force = true)
+            val dir = File(instance.storagePath)
+            // An instance holds the extracted guest (GBs, tens of thousands of files), which takes a minute to delete.
+            // Rootless files are all ours, so move the directory aside (instant) and delete it in the background.
+            val trashed = isRootless(instance.id) && withContext(Dispatchers.IO) { moveToTrash(dir) }
+            if (trashed) {
+                scope.launch { emptyTrash() }
+            } else {
+                withContext(Dispatchers.IO) { if (dir.exists()) dir.deleteRecursively() }
+                if (dir.exists() && connectFor(instance.id) == null) helperFor(instance.id).request("rmtree", dir.path, timeoutMs = 120_000)
+            }
+            withContext(Dispatchers.IO) { shortcutStore.forgetInstance(instance.id) }
+            statusFlows.remove(instance.id)
+            errorFlows.remove(instance.id)
+        } catch (e: Throwable) {
+            deletingFlow.update { it - instance.id }
+            throw e
+        }
+    }
+
+    private fun moveToTrash(dir: File): Boolean {
+        if (!dir.exists()) return true
+        trashDir.mkdirs()
+        return dir.renameTo(File(trashDir, "${dir.name}-${System.currentTimeMillis()}"))
+    }
+
+    // Also runs at startup, finishing deletes the process did not live to complete
+    private suspend fun emptyTrash() = trashLock.withLock {
+        val entries = trashDir.listFiles() ?: return@withLock
+        for (entry in entries) {
+            val rm = runCatching {
+                ProcessBuilder("rm", "-rf", entry.path).redirectErrorStream(true).redirectOutput(File("/dev/null")).start().waitFor()
+            }
+            if (rm.isFailure || entry.exists()) entry.deleteRecursively()
+        }
     }
 
     fun pauseInstance(instanceId: String) {

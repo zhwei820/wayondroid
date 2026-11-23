@@ -169,6 +169,7 @@ fun WayondroidApp(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit
                     onDeleteInstance = vm::deleteInstance,
                     onCreateInstance = { navController.navigate(Screen.ROMs.route) },
                     modifier = Modifier.fillMaxSize(),
+                    deletingIds = uiState.deletingIds,
                 )
             }
 

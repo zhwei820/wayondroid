@@ -137,3 +137,4 @@ deps/cleat/
 deps/mesa/
 deps/gfxstream/
 deps/rutabaga_gfx/
+*.salive

@@ -26,6 +26,7 @@ fun HomeScreen(
     onDeleteInstance: (VMInstance) -> Unit,
     onCreateInstance: () -> Unit,
     modifier: Modifier = Modifier,
+    deletingIds: Set<String> = emptySet(),
 ) {
     Scaffold(
         topBar = {
@@ -70,6 +71,7 @@ fun HomeScreen(
                     items(items = instances, key = { it.id }) { instance ->
                         InstanceCard(
                             instance = instance,
+                            isDeleting = instance.id in deletingIds,
                             onLaunchClick = onLaunchInstance,
                             onStopClick = onStopInstance,
                             onCardClick = onInstanceDetail,

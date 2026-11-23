@@ -18,8 +18,10 @@ import com.hexadecinull.vineos.BuildConfig
 import com.hexadecinull.vineos.data.models.GuestResolution
 import com.hexadecinull.vineos.data.models.NavButtonsMode
 import com.hexadecinull.vineos.data.models.ScreenFit
+import com.hexadecinull.vineos.domain.RamSizing
 import com.hexadecinull.vineos.shizuku.ShizukuStatus
 import com.hexadecinull.vineos.ui.components.StorageSizePicker
+import com.hexadecinull.vineos.ui.components.rememberMaxRamMb
 import com.hexadecinull.vineos.ui.components.rememberMaxStorageMb
 import com.hexadecinull.vineos.ui.viewmodel.ProbeState
 
@@ -53,6 +55,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     val maxStorageMb = rememberMaxStorageMb()
+    val maxRamMb = rememberMaxRamMb()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -88,10 +91,10 @@ fun SettingsScreen(
                     icon = Icons.Outlined.Memory,
                     title = "Default RAM",
                     subtitle = "${settings.defaultRamMb} MB",
-                    value = settings.defaultRamMb.toFloat(),
-                    valueRange = 512f..4096f,
-                    steps = 6,  // 512, 768, 1024, 1536, 2048, 3072, 4096
-                    onValueChange = { onSettingsChange(settings.copy(defaultRamMb = it.toInt())) }
+                    value = RamSizing.clamp(settings.defaultRamMb, maxRamMb).toFloat(),
+                    valueRange = RamSizing.MIN_MB.toFloat()..maxRamMb.toFloat(),
+                    steps = (maxRamMb - RamSizing.MIN_MB) / RamSizing.STEP_MB - 1,
+                    onValueChange = { onSettingsChange(settings.copy(defaultRamMb = RamSizing.clamp(it.toInt(), maxRamMb))) }
                 )
                 StorageSettingsItem(
                     icon = Icons.Outlined.Storage,

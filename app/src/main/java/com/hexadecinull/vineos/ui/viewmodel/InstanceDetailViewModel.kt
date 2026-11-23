@@ -14,6 +14,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -80,7 +81,8 @@ class InstanceDetailViewModel @Inject constructor(
     }
 
     fun delete(instance: VMInstance) {
-        viewModelScope.launch {
+        // The screen pops right after confirming, which clears this ViewModel; the delete must still finish
+        viewModelScope.launch(NonCancellable) {
             if (instance.status != VMStatus.STOPPED) vmManager.killInstance(instance.id)
             vmManager.deleteInstanceFiles(instance)
             instanceRepo.delete(instance)

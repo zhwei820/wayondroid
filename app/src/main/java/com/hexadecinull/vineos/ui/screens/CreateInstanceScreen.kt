@@ -18,8 +18,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.hexadecinull.vineos.domain.RamSizing
 import com.hexadecinull.vineos.domain.StorageSizing
 import com.hexadecinull.vineos.ui.components.StorageSizePicker
+import com.hexadecinull.vineos.ui.components.rememberMaxRamMb
 import com.hexadecinull.vineos.ui.components.rememberMaxStorageMb
 import com.hexadecinull.vineos.ui.viewmodel.CreateInstanceState
 import com.hexadecinull.vineos.ui.viewmodel.CreateInstanceViewModel
@@ -56,6 +58,7 @@ fun CreateInstanceScreen(
     val state by vm.state.collectAsStateWithLifecycle()
 
     val maxStorageMb = rememberMaxStorageMb()
+    val maxRamMb = rememberMaxRamMb()
 
     LaunchedEffect(romId) { vm.loadRom(romId) }
     LaunchedEffect(state) {
@@ -130,8 +133,8 @@ fun CreateInstanceScreen(
                 label = "RAM",
                 value = ram,
                 valueLabel = "$ram MB",
-                range = 512f..4096f,
-                step = 512,
+                range = RamSizing.MIN_MB.toFloat()..maxRamMb.toFloat(),
+                step = RamSizing.STEP_MB,
                 onChange = { vm.selectedRamMb.value = it },
             )
 

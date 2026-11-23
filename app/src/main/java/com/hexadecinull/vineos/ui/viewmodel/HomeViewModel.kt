@@ -15,18 +15,22 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class HomeUiState(val instances: List<VMInstance> = emptyList(), val isLoading: Boolean = true, val error: String? = null)
+data class HomeUiState(
+    val instances: List<VMInstance> = emptyList(),
+    val isLoading: Boolean = true,
+    val error: String? = null,
+    val deletingIds: Set<String> = emptySet(),
+)
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(private val instanceRepo: InstanceRepository, private val vmManager: VineVMManager) : ViewModel() {
 
     private val errorFlow = MutableStateFlow<String?>(null)
 
-    val uiState: StateFlow<HomeUiState> = instanceRepo.observeAll()
-        .combine(errorFlow) { instances, error ->
-            HomeUiState(instances = instances, isLoading = false, error = error)
-        }
-        .stateIn(
+    val uiState: StateFlow<HomeUiState> =
+        combine(instanceRepo.observeAll(), errorFlow, vmManager.deletingInstances) { instances, error, deleting ->
+            HomeUiState(instances = instances, isLoading = false, error = error, deletingIds = deleting)
+        }.stateIn(
             scope = viewModelScope,
             // No grace period: sources are already-cached hot flows, so a rebuild on resubscribe is cheap
             started = SharingStarted.WhileSubscribed(),
