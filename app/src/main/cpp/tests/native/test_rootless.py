@@ -142,7 +142,8 @@ def build_images(top, inst, audio_hal_class=1, sensors_libs=True):
     open(os.path.join(sysd, "system/build.prop"), "w").write(
         "ro.system.product.cpu.abilist=arm64-v8a,armeabi-v7a,armeabi\n"
         "ro.system.product.cpu.abilist32=armeabi-v7a,armeabi\n"
-        "ro.zygote=zygote64_32\nro.build.id=TEST\n")
+        "ro.zygote=zygote64_32\nro.build.id=TEST\nro.build.version.release=13\n"
+        "ro.build.fingerprint=waydroid/lineage_waydroid_arm64/waydroid_arm64:13/TEST/1:userdebug/test-keys\n")
     open(os.path.join(sysd, "system/etc/init/hw/init.zygote64_32.rc"), "w").write(
         "service zygote /system/bin/app_process64\n    class main\n\nservice zygote_secondary /system/bin/app_process32\n    class main\n")
     if sensors_libs:  # the image's HIDL interface libraries for the sensors HAL
@@ -320,7 +321,13 @@ def main():
     print("[rootfs preparation]")
     prop = read(os.path.join(R, "system/build.prop"))
     check("ro.system.product.cpu.abilist=arm64-v8a\n" in prop and "ro.system.product.cpu.abilist32=\n" in prop and
-          "ro.zygote=zygote64\n" in prop and "ro.build.id=TEST" in prop, "64-bit-only system props: " + prop)
+          "ro.zygote=zygote64\n" in prop, "64-bit-only system props: " + prop)
+    pixel5 = "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"
+    check("ro.build.id=TQ3A.230901.001.C2\n" in prop and "ro.build.fingerprint=" + pixel5 + "\n" in prop and
+          "ro.build.version.release=13\n" in prop, "Pixel 5 build: " + prop)
+    check("ro.product.board=redfin\n" in prop and "ro.soc.model=SM7250\n" in prop and
+          "ro.vendor.build.fingerprint=" + pixel5 + "\n" in prop and "ro.product.system.model=mainline\n" in prop,
+          "Pixel 5 props the image lacks, added: " + prop)
     check("ro.vendor.product.cpu.abilist=arm64-v8a\n" in read(os.path.join(R, "vendor/build.prop")), "vendor props")
     z = read(os.path.join(R, "system/etc/init/hw/init.zygote64.rc"))
     check("service zygote " in z and "zygote_secondary" not in z, "zygote64 rc: " + z)
@@ -428,6 +435,7 @@ def main():
     check(ev is not None and "init exited with 3" in ev[3], "init crash reported: " + str(ev))
     check(os.path.exists(marker), "no second extraction")
     check(read(os.path.join(R, "system/etc/init/vold.rc")).count("libvine_vold_shim") == 1, "vold.rc patched once")
+    check(read(os.path.join(R, "system/build.prop")).count("\nro.product.board=") == 1, "Pixel 5 props added once")
     os.unlink(os.path.join(W, "init-crash"))
 
     print("[64-bit audio HAL kept]")

@@ -9,9 +9,6 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#if defined(__ANDROID__)
-#include <sys/system_properties.h>
-#endif
 
 namespace vine::rootless {
 
@@ -510,29 +507,111 @@ std::string props_64bit_only(const std::string& build_prop) {
     return out;
 }
 
-DeviceIdentity host_identity() {
+DeviceIdentity guest_identity() {
     DeviceIdentity id;
-#if defined(__ANDROID__)
-    auto get = [](const char* key) {
-        char value[PROP_VALUE_MAX] = {};
-        __system_property_get(key, value);
-        return std::string(value);
+    id.brand = "google";
+    id.manufacturer = "Google";
+    id.model = "Pixel 5";
+    id.name = id.device = id.board = id.hardware = id.build_product = "redfin";
+    id.build_id = "TQ3A.230901.001.C2";
+    id.incremental = "10753682";
+    id.fingerprint = "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys";
+    id.description = "redfin-user 13 TQ3A.230901.001.C2 10753682 release-keys";
+    id.flavor = "redfin-user";
+    id.build_host = "abfarm-release-rbe-64-2004-0087";
+    id.date = "Sat Sep  2 01:48:29 UTC 2023";
+    id.date_utc = "1693619309";
+    id.security_patch = "2023-09-01";
+    id.soc_manufacturer = "QTI";
+    id.soc_model = "SM7250";
+    id.props = {
+        {"ro.product.product.brand", "google"},
+        {"ro.product.product.device", "redfin"},
+        {"ro.product.product.manufacturer", "Google"},
+        {"ro.product.product.model", "Pixel 5"},
+        {"ro.product.product.name", "redfin"},
+        {"ro.product.build.date", "Sat Sep  2 01:48:29 UTC 2023"},
+        {"ro.product.build.date.utc", "1693619309"},
+        {"ro.product.build.fingerprint", "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"},
+        {"ro.product.build.id", "TQ3A.230901.001.C2"},
+        {"ro.product.build.tags", "release-keys"},
+        {"ro.product.build.type", "user"},
+        {"ro.product.build.version.incremental", "10753682"},
+        {"ro.product.vendor.brand", "google"},
+        {"ro.product.vendor.device", "redfin"},
+        {"ro.product.vendor.manufacturer", "Google"},
+        {"ro.product.vendor.model", "Pixel 5"},
+        {"ro.product.vendor.name", "redfin"},
+        {"ro.vendor.build.date", "Sat Sep  2 01:48:29 UTC 2023"},
+        {"ro.vendor.build.date.utc", "1693619309"},
+        {"ro.vendor.build.fingerprint", "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"},
+        {"ro.vendor.build.id", "TQ3A.230901.001.C2"},
+        {"ro.vendor.build.tags", "release-keys"},
+        {"ro.vendor.build.type", "user"},
+        {"ro.vendor.build.version.incremental", "10753682"},
+        {"ro.vendor.build.security_patch", "2023-09-01"},
+        {"ro.bootimage.build.date", "Sat Sep  2 01:48:29 UTC 2023"},
+        {"ro.bootimage.build.date.utc", "1693619309"},
+        {"ro.bootimage.build.fingerprint", "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"},
+        {"ro.product.odm.brand", "google"},
+        {"ro.product.odm.device", "redfin"},
+        {"ro.product.odm.manufacturer", "Google"},
+        {"ro.product.odm.model", "Pixel 5"},
+        {"ro.product.odm.name", "redfin"},
+        {"ro.odm.build.date", "Sat Sep  2 01:48:29 UTC 2023"},
+        {"ro.odm.build.date.utc", "1693619309"},
+        {"ro.odm.build.fingerprint", "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"},
+        {"ro.odm.build.id", "TQ3A.230901.001.C2"},
+        {"ro.odm.build.tags", "release-keys"},
+        {"ro.odm.build.type", "user"},
+        {"ro.odm.build.version.incremental", "10753682"},
+        {"ro.product.system.brand", "google"},
+        {"ro.product.system.device", "generic"},
+        {"ro.product.system.manufacturer", "Google"},
+        {"ro.product.system.model", "mainline"},
+        {"ro.product.system.name", "mainline"},
+        {"ro.system.build.date", "Sat Sep  2 01:48:29 UTC 2023"},
+        {"ro.system.build.date.utc", "1693619309"},
+        {"ro.system.build.fingerprint", "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"},
+        {"ro.system.build.id", "TQ3A.230901.001.C2"},
+        {"ro.system.build.tags", "release-keys"},
+        {"ro.system.build.type", "user"},
+        {"ro.system.build.version.incremental", "10753682"},
+        {"ro.build.id", "TQ3A.230901.001.C2"},
+        {"ro.build.display.id", "TQ3A.230901.001.C2"},
+        {"ro.build.version.incremental", "10753682"},
+        {"ro.build.version.security_patch", "2023-09-01"},
+        {"ro.build.date", "Sat Sep  2 01:48:29 UTC 2023"},
+        {"ro.build.date.utc", "1693619309"},
+        {"ro.build.type", "user"},
+        {"ro.build.user", "android-build"},
+        {"ro.build.host", "abfarm-release-rbe-64-2004-0087"},
+        {"ro.build.tags", "release-keys"},
+        {"ro.build.flavor", "redfin-user"},
+        {"ro.build.product", "redfin"},
+        {"ro.build.description", "redfin-user 13 TQ3A.230901.001.C2 10753682 release-keys"},
+        {"ro.build.fingerprint", "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"},
+        {"ro.product.brand", "google"},
+        {"ro.product.device", "redfin"},
+        {"ro.product.manufacturer", "Google"},
+        {"ro.product.model", "Pixel 5"},
+        {"ro.product.name", "redfin"},
+        {"ro.product.system_ext.brand", "google"},
+        {"ro.product.system_ext.device", "redfin"},
+        {"ro.product.system_ext.manufacturer", "Google"},
+        {"ro.product.system_ext.model", "Pixel 5"},
+        {"ro.product.system_ext.name", "redfin"},
+        {"ro.system_ext.build.date", "Sat Sep  2 01:48:29 UTC 2023"},
+        {"ro.system_ext.build.date.utc", "1693619309"},
+        {"ro.system_ext.build.fingerprint", "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"},
+        {"ro.system_ext.build.id", "TQ3A.230901.001.C2"},
+        {"ro.system_ext.build.tags", "release-keys"},
+        {"ro.system_ext.build.type", "user"},
+        {"ro.system_ext.build.version.incremental", "10753682"},
     };
-    id.brand = get("ro.product.brand");
-    id.manufacturer = get("ro.product.manufacturer");
-    id.model = get("ro.product.model");
-    id.name = get("ro.product.name");
-    id.device = get("ro.product.device");
-    id.board = get("ro.product.board");
-    id.incremental = get("ro.build.version.incremental");
-    id.hardware = get("ro.hardware");
-    id.build_host = get("ro.build.host");
-    id.flavor = get("ro.build.flavor");
-    id.soc_manufacturer = get("ro.soc.manufacturer");
-    id.soc_model = get("ro.soc.model");
-#endif
     return id;
 }
+
 
 namespace {
 
@@ -555,22 +634,10 @@ std::string build_field(const std::string& key) {
     return key.substr(dot + 7);
 }
 
-std::vector<std::string> words_of(const std::string& text) {
-    std::vector<std::string> words;
-    for (size_t a = 0; a < text.size();) {
-        const size_t b = text.find(' ', a);
-        words.push_back(text.substr(a, b == std::string::npos ? std::string::npos : b - a));
-        if (b == std::string::npos) break;
-        a = b + 1;
-    }
-    return words;
-}
-
 } // namespace
 
 std::string props_device(const std::string& build_prop, const DeviceIdentity& id) {
     if (id.empty()) return build_prop;
-    const std::string incremental = id.incremental.empty() ? "release" : id.incremental;
     std::string out;
     size_t pos = 0;
     while (pos < build_prop.size()) {
@@ -580,52 +647,49 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
         pos = has_nl ? nl + 1 : build_prop.size();
         const size_t eq = line.find('=');
         if (eq != std::string::npos && !line.empty() && line[0] != '#') {
-            const std::string key = line.substr(0, eq), value = line.substr(eq + 1);
+            const std::string key = line.substr(0, eq);
             const std::string product = product_field(key), build = build_field(key);
-            const char* set = nullptr;
-            std::string made;
+            const std::string* set = nullptr;
+            static const std::string zero = "0", one = "1", none = "none", user = "user", release_keys = "release-keys",
+                                     android_build = "android-build";
+            // The device's own line first, else one made from its fields
+            for (const auto& [k, v] : id.props) {
+                if (k == key) set = &v;
+            }
+            if (set) {
+            }
             // A phone's: risk SDKs (汽水音乐's) block on debuggable or adb-on
             // builds. The engine's exec channel needs neither.
-            if (key == "ro.debuggable") set = "0";
-            else if (key == "ro.adb.secure") set = "1";
-            else if (key == "persist.sys.usb.config") set = "none";
-            else if (product == "brand") set = id.brand.c_str();
-            else if (product == "manufacturer") set = id.manufacturer.c_str();
-            else if (product == "model") set = id.model.c_str();
-            else if (product == "name") set = id.name.c_str();
-            else if (product == "device") set = id.device.c_str();
-            else if (product == "board" && !id.board.empty()) set = id.board.c_str();
+            else if (key == "ro.debuggable") set = &zero;
+            else if (key == "ro.adb.secure") set = &one;
+            else if (key == "persist.sys.usb.config") set = &none;
+            else if (product == "brand") set = &id.brand;
+            else if (product == "manufacturer") set = &id.manufacturer;
+            else if (product == "model") set = &id.model;
+            else if (product == "name") set = &id.name;
+            else if (product == "device") set = &id.device;
+            else if (product == "board") set = &id.board;
             // user, as risk SDKs (汽水音乐's) block userdebug. Costs a boot-time
             // "There's an internal problem with your device" dialog: on user,
             // Build.isBuildConsistent() runs the VINTF check, which a guest
             // cannot pass (no kernel sepolicy version or config, a kernel
             // newer than the matrices know). Nothing else reads that result.
-            else if (build == "type") set = "user";
-            else if (build == "tags") set = "release-keys";
-            else if (build == "version.incremental") set = incremental.c_str();
-            else if (build == "user") set = "android-build";
-            else if (build == "host") set = id.build_host.empty() ? "localhost" : id.build_host.c_str();
-            else if (build == "product") set = id.device.c_str();
-            else if (build == "flavor") set = id.flavor.empty() ? (made = id.name + "-user").c_str() : id.flavor.c_str();
-            else if (key == "ro.soc.manufacturer" && !id.soc_manufacturer.empty()) set = id.soc_manufacturer.c_str();
-            else if (key == "ro.soc.model" && !id.soc_model.empty()) set = id.soc_model.c_str();
-            else if (build == "fingerprint") {
-                // <brand>/<name>/<device>:<release>/<id>/<incremental>:<type>/<tags>
-                const size_t colon = value.find(':');
-                const size_t s1 = colon == std::string::npos ? colon : value.find('/', colon + 1);
-                const size_t s2 = s1 == std::string::npos ? s1 : value.find('/', s1 + 1);
-                if (s2 != std::string::npos)
-                    set = (made = id.brand + "/" + id.name + "/" + id.device + ":" + value.substr(colon + 1, s1 - colon - 1) + "/" +
-                                  value.substr(s1 + 1, s2 - s1 - 1) + "/" + incremental + ":user/release-keys").c_str();
-            } else if (build == "description" || build == "display.id") {
-                // Waydroid's "<flavor> <release> <id> <incremental> <tags>"; ours has the same five words
-                const auto w = words_of(value);
-                if (w.size() == 5)
-                    set = (made = build == "display.id" ? w[2] + " release-keys"
-                                                        : id.name + "-user " + w[1] + " " + w[2] + " " + incremental + " release-keys")
-                              .c_str();
-            }
-            if (set) line = key + "=" + set;
+            else if (build == "type") set = &user;
+            else if (build == "tags") set = &release_keys;
+            else if (build == "user") set = &android_build;
+            else if (build == "id" || build == "display.id") set = &id.build_id;
+            else if (build == "version.incremental") set = &id.incremental;
+            else if (build == "fingerprint") set = &id.fingerprint;
+            else if (build == "description") set = &id.description;
+            else if (build == "flavor") set = &id.flavor;
+            else if (build == "host") set = &id.build_host;
+            else if (build == "product") set = &id.build_product;
+            else if (build == "date") set = &id.date;
+            else if (build == "date.utc") set = &id.date_utc;
+            else if (build == "version.security_patch" || build == "security_patch") set = &id.security_patch;
+            else if (key == "ro.soc.manufacturer") set = &id.soc_manufacturer;
+            else if (key == "ro.soc.model") set = &id.soc_model;
+            if (set && !set->empty()) line = key + "=" + *set;
         }
         out += line;
         if (has_nl) out += "\n";
@@ -726,28 +790,40 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // waydroid_arm64_only ships a 64-bit one)
     const bool own_audio_hal = !o.host_has_32bit && is_regular_file(hal_service) &&
                                is_elf32(R + "/vendor/bin/hw/android.hardware.audio.service");
-    // The phone's identity instead of Waydroid's (apps reading Build.* or
-    // the fingerprint see a release build of this phone, on Android 13)
-    const DeviceIdentity id = host_identity();
+    // A Pixel 5's identity instead of Waydroid's (apps reading Build.* or
+    // the fingerprint see its Android 13 release build), for an Android 13
+    // image only: on another release the identity would contradict it
+    DeviceIdentity id = guest_identity();
+    const auto system_prop = read_file(R + "/system/build.prop");
+    if (!system_prop || system_prop->find("\nro.build.version.release=13\n") == std::string::npos) id = DeviceIdentity{};
     if (!id.empty()) {
+        std::vector<std::pair<std::string, std::string>> files;
         for (const char* f : {"/system/build.prop", "/system/system_ext/etc/build.prop", "/system/product/etc/build.prop",
                               "/vendor/build.prop", "/vendor/odm/etc/build.prop", "/vendor/vendor_dlkm/etc/build.prop",
                               "/odm/etc/build.prop"}) {
-            const auto text = read_file(R + f);
-            if (!text) continue;
-            std::string edited = props_device(*text, id);
-            // Build.BOARD: Waydroid sets no ro.product.board at all
-            if (!strcmp(f, "/system/build.prop") && !id.board.empty() && edited.find("\nro.product.board=") == std::string::npos)
-                edited += (edited.empty() || edited.back() == '\n' ? "" : "\n") + std::string("ro.product.board=") + id.board + "\n";
-            // A phone names its SoC; Waydroid sets neither
-            if (!strcmp(f, "/system/build.prop")) {
-                for (const auto& [k, v] : {std::pair<const char*, const std::string*>{"ro.soc.manufacturer", &id.soc_manufacturer},
-                                           {"ro.soc.model", &id.soc_model}}) {
-                    if (!v->empty() && edited.find(std::string("\n") + k + "=") == std::string::npos)
-                        edited += (edited.empty() || edited.back() == '\n' ? "" : "\n") + std::string(k) + "=" + *v + "\n";
-                }
-            }
-            if (edited != *text && !write_mode(R + f, edited, 0644, error)) return false;
+            if (const auto text = read_file(R + f)) files.emplace_back(f, *text);
+        }
+        for (auto& [f, text] : files) {
+            const std::string edited = props_device(text, id);
+            if (edited != text && !write_mode(R + f, edited, 0644, error)) return false;
+            text = "\n" + edited;
+        }
+        // What the device sets that the image's partitions don't (Waydroid
+        // sets no ro.product.board or ro.soc.*), into /system/build.prop
+        std::vector<std::pair<std::string, std::string>> wanted = id.props;
+        wanted.insert(wanted.end(), {{"ro.product.board", id.board},
+                                     {"ro.soc.manufacturer", id.soc_manufacturer},
+                                     {"ro.soc.model", id.soc_model}});
+        std::string add;
+        for (const auto& [k, v] : wanted) {
+            bool present = false;
+            for (const auto& [f, text] : files) present = present || text.find("\n" + k + "=") != std::string::npos;
+            if (!present && add.find("\n" + k + "=") == std::string::npos) add += "\n" + k + "=" + v;
+        }
+        if (!add.empty() && !files.empty() && files[0].first == "/system/build.prop") {
+            std::string edited = files[0].second.substr(1);
+            if (!edited.empty() && edited.back() != '\n') edited += "\n";
+            if (!write_mode(R + files[0].first, edited + add.substr(1) + "\n", 0644, error)) return false;
         }
     }
     // tawcroot serves it as /proc/cmdline (ro.hardware, verified boot); apps

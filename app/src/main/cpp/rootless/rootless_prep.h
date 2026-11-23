@@ -47,22 +47,27 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error);
 // `ro.zygote=zygote64`; other lines unchanged.
 std::string props_64bit_only(const std::string& build_prop);
 
-// The phone's identity, which the guest presents instead of Waydroid's
+// The device the guest presents instead of Waydroid
 struct DeviceIdentity {
-    std::string brand, manufacturer, model, name, device, board, incremental, hardware;
-    std::string build_host, flavor, soc_manufacturer, soc_model;
+    std::string brand, manufacturer, model, name, device, board, hardware;
+    std::string build_id, incremental, fingerprint, description, flavor, build_host, build_product;
+    std::string date, date_utc, security_patch, soc_manufacturer, soc_model;
+    // The device's own build.prop lines, exact; they win over the fields
+    std::vector<std::pair<std::string, std::string>> props;
     bool empty() const { return brand.empty() || model.empty() || device.empty(); }
 };
 
-// The phone's own ro.product.* and friends; empty off Android (host tests)
-DeviceIdentity host_identity();
+// A Google Pixel 5 on its Android 13 release: a device that ran the
+// guest's Android version, unlike the phone. A Snapdragon, as the phone
+// is, so the GPU's vendor agrees. Values from the factory image's
+// build.props (redfin TQ3A.230901.001.C2).
+DeviceIdentity guest_identity();
 
 // A build.prop presenting `id` as a release build: every partition's
-// ro.product.<part>.{brand,manufacturer,model,name,device}, release-keys
-// tags, user type, user/release-keys fingerprints, not
-// debuggable and adb off,
-// keeping the image's Android release and build id. Other lines unchanged;
-// running it again changes nothing.
+// product, build id, fingerprint, dates and patch level, release-keys
+// tags, user type, not debuggable and adb off, keeping the image's
+// Android release. Other lines unchanged; running it again changes
+// nothing.
 std::string props_device(const std::string& build_prop, const DeviceIdentity& id);
 
 // /proc/cmdline as the guest's init reads it (through tawcroot, from
