@@ -31,6 +31,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -46,6 +48,13 @@ void tawcroot_proctitle_stash(int argc, char **argv);
  * in the initial-stack region — sources are bounced first). */
 void tawcroot_proctitle_apply(const char *exec_path,
                               int argc, const char *const *argv);
+
+/* After apply: point the guest's argv slots (the synthesized stack's
+ * argv[0..argc-1]) at the strings in the kernel arg region, so a guest
+ * that renames itself by writing over argv[0] (Android's zygote naming
+ * each app, setproctitle) changes /proc/<pid>/cmdline as on a real
+ * exec. Only when apply wrote every string whole; 1 if done. */
+int tawcroot_proctitle_point_argv(uintptr_t *slots, int argc);
 
 #ifdef __cplusplus
 }

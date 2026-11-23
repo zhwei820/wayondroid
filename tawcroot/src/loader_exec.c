@@ -471,6 +471,8 @@ void tawcroot_loader_exec(const struct tawc_loader_exec_args *args)
 	 * region, which is where eff_argv/guest_path point on the
 	 * top-level prod entry. */
 	tawcroot_proctitle_apply(args->guest_path, eff_argc, eff_argv);
+	/* argv[] sits right above argc at the guest's SP */
+	(void)tawcroot_proctitle_point_argv((uintptr_t *)(so.sp + sizeof(uintptr_t)), eff_argc);
 	tawcroot_stats_guest_entering();
 	tawcroot_guest_start_stack = so.sp;
 	tawc_loader_jump(so.sp, entry);
