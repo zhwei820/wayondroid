@@ -1,5 +1,7 @@
 # Rootless bring-up scripts
 
+English · [简体中文](README.zh-CN.md)
+
 Device-side scripts for iterating on the rootless engine over adb.
 
 Staging lives in `/data/local/tmp/vine-dev/` (shell user):

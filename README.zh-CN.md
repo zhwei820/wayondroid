@@ -121,7 +121,7 @@ Wayondroid app (one app uid, no root)
 - 每个 guest App 都是 Wayondroid 的进程，因此与手机共享内存：关掉其他重量级 App 可让 guest 更流畅。
 
 旧的 root 引擎（真实的 namespace 和 loop 挂载，用于已 root 的手机）及其位于
-[`rom/`](rom/README.md) 的 guest 套件仍在代码树中，但尚未成功启动过 ROM。
+[`rom/`](rom/README.zh-CN.md) 的 guest 套件仍在代码树中，但尚未成功启动过 ROM。
 
 ## 许可证
 

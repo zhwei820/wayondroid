@@ -16,21 +16,44 @@ macOS 上可用 Linux x86_64 虚拟机，或 CI 用的镜像（Apple Silicon 需
 docker run --rm -it --platform linux/amd64 -v "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash
 ```
 
+网络有 HTTPS 中间人代理（如 Zscaler）时，容器里的 curl 和 Gradle 会报 `SSL certificate problem` /
+`PKIX path building failed`。把代理的根证书从 macOS 钥匙串导出，挂进容器；temurin 镜像在
+`USE_SYSTEM_CA_CERTS=1` 时会把 `/certificates/*.crt` 同时加入系统证书库和 JDK 的 cacerts：
+
+```sh
+mkdir -p ~/docker-certs
+security find-certificate -a -c "Zscaler Root CA" -p /Library/Keychains/System.keychain > ~/docker-certs/zscaler.crt
+docker run --rm -it --platform linux/amd64 \
+    -e USE_SYSTEM_CA_CERTS=1 -v ~/docker-certs:/certificates:ro \
+    -v "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash
+```
+
+
+docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -v ~/docker-certs:/certificates:ro -v "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash
+
+
+注意：仓库根目录的 `local.properties` 里如果有宿主机的 `sdk.dir`（如 `/Users/...`），它优先于
+`ANDROID_HOME`，在容器里会找不到 SDK。容器内构建前把它改成容器里的 SDK 路径，或临时挪开。
+
 ### 依赖
 
 | 依赖 | 说明 |
 |---|---|
 | JDK 17 | CI 使用 `eclipse-temurin:17-jdk-jammy` |
 | Android SDK | `compileSdk = 37`；`ANDROID_HOME` 指向 SDK，或在 `local.properties` 写 `sdk.dir=` |
-| Android NDK | 装在 `$ANDROID_HOME/ndk/` 下，脚本取版本号最大的那个 |
+| Android NDK | `28.2.13676358`（AGP 9.4.1 的默认版本），装在 `$ANDROID_HOME/ndk/` 下 |
 | CMake 3.22.1 | 通过 SDK Manager 安装（`cmake;3.22.1`） |
 
 全新的 Linux 环境可以用 CI 的脚本装 SDK 组件：
 
 ```sh
 export ANDROID_HOME=$HOME/Android/Sdk
-ANDROID_SDK_NATIVE=true ANDROID_NDK_VERSION=<版本号> scripts/ci/setup-android-sdk.sh
+ANDROID_SDK_NATIVE=true ANDROID_NDK_VERSION=28.2.13676358 scripts/ci/setup-android-sdk.sh
 ```
+
+不传 `ANDROID_NDK_VERSION` 时脚本不装 NDK，Gradle 会在构建时自动下载 AGP 的默认版本（CI 就是这样）。
+但 `scripts/gpu/build-gpu.sh` 在 Gradle 之前运行，取的是 `$ANDROID_HOME/ndk/` 下版本号最大的那个，
+所以要构建 GPU 组件就得预先装好；升级 AGP 后这个版本号要跟着改。
 
 ### 构建 APK
 
@@ -49,6 +72,12 @@ Release 构建：
 ```sh
 ./gradlew :app:assembleRelease
 ```
+
+
+export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts -Djavax.net.ssl.trustStorePassword=changeit"                                                                       
+./gradlew --stop                                                                                                                                                                                               
+./gradlew :app:assembleRelease
+
 
 根目录有 `keystore.properties`（`storeFile`、`storePassword`、`keyAlias`、`keyPassword`）
 时签名，没有则产出未签名的 APK。

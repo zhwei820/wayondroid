@@ -1,5 +1,7 @@
 tawcroot — fast rootless chroot via systrap
 
+English · [简体中文](README.zh-CN.md)
+
 The default guest identity is virtual root. `--host-user` uses the launching
 process's UID and GID instead, for desktop sessions and Unix socket credential
 authentication. Neither mode grants Android privileges. The ARM64 namespace
