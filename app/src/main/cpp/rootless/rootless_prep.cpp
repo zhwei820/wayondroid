@@ -418,6 +418,58 @@ std::string zygote64_rc(const std::string& zygote64_32) {
     return at == std::string::npos ? zygote64_32 : zygote64_32.substr(0, at + 1);
 }
 
+// The emulator's sensors HAL (scripts/sensors/fetch-hal.sh), fed by
+// vine_sensors. Waydroid's own HAL (1.0) has no sensors; it stays, and
+// SensorService takes 2.1 first. Without the prebuilts nothing changes.
+//
+// The interface libraries are the image's own builds, not the
+// emulator's: Waydroid's libhidlbase adds a virtual to IBinder, and
+// stubs built against AOSP's call the wrong slot.
+bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::string* error) {
+    const std::string multihal = lib_dir + "/libvine_sensors_multihal.so";
+    const std::string ranchu = lib_dir + "/libvine_sensors_ranchu.so";
+    const std::string wakelock = lib_dir + "/libvine_sensors_wakelock.so";
+    const std::string sys = R + "/system/lib64/";
+    for (const std::string& f : {multihal, ranchu, wakelock, lib_dir + "/libvine_sensors_shim.so",
+                                 sys + "android.hardware.sensors@2.0.so", sys + "android.hardware.sensors@2.1.so"}) {
+        if (!is_regular_file(f)) return true;
+    }
+    const std::string V = R + "/vendor";
+    for (const char* d : {"/bin/hw", "/lib64/hw", "/etc/init", "/etc/sensors", "/etc/vintf/manifest"}) {
+        if (!mkdirs_or_fail(V + d, error)) return false;
+    }
+    const std::string service = "/vendor/bin/hw/android.hardware.sensors@2.1-service.multihal";
+    return copy_mode(multihal, R + service, 0755, error) &&
+           copy_mode(ranchu, V + "/lib64/hw/android.hardware.sensors@2.1-impl.ranchu.so", 0644, error) &&
+           copy_mode(wakelock, V + "/lib64/android.hardware.sensors@2.0-ScopedWakelock.so", 0644, error) &&
+           copy_mode(lib_dir + "/libvine_sensors_shim.so", V + "/lib64/libvine_sensors_shim.so", 0644, error) &&
+           copy_mode(sys + "android.hardware.sensors@2.0.so", V + "/lib64/android.hardware.sensors@2.0.so", 0644, error) &&
+           copy_mode(sys + "android.hardware.sensors@2.1.so", V + "/lib64/android.hardware.sensors@2.1.so", 0644, error) &&
+           write_mode(V + "/etc/sensors/hals.conf", "android.hardware.sensors@2.1-impl.ranchu.so\n", 0644, error) &&
+           write_mode(V + "/etc/vintf/manifest/vine-sensors.xml",
+                      "<manifest version=\"1.0\" type=\"device\">\n"
+                      "    <hal format=\"hidl\">\n"
+                      "        <name>android.hardware.sensors</name>\n"
+                      "        <transport>hwbinder</transport>\n"
+                      "        <version>2.1</version>\n"
+                      "        <interface>\n"
+                      "            <name>ISensors</name>\n"
+                      "            <instance>default</instance>\n"
+                      "        </interface>\n"
+                      "    </hal>\n"
+                      "</manifest>\n",
+                      0644, error) &&
+           // The emulator's rc, less its rtprio rlimit and task profile
+           write_mode(V + "/etc/init/vine-sensors.rc",
+                      "service vendor.sensors-hal-2-1-multihal " + service + "\n"
+                      "    class hal\n"
+                      "    user system\n"
+                      "    group system wakelock context_hub uhid\n"
+                      "    capabilities BLOCK_SUSPEND\n"
+                      "    setenv LD_PRELOAD /vendor/lib64/libvine_sensors_shim.so\n",
+                      0644, error);
+}
+
 } // namespace
 
 Layout layout_for(const std::string& instance_path) {
@@ -756,6 +808,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))
         return false;
+    if (!install_sensors_hal(R, o.lib_dir, error)) return false;
 
     // A first boot has no app ops recorded, and LineageOS 20's SystemUI
     // then crashes on getPackagesForOps() returning null. Seed one that

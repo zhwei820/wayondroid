@@ -45,6 +45,21 @@ guest 能启动到锁屏，并可通过注入的输入使用：滑动解锁进�
   不会出现的服务（铃声预览会卡住设置），编解码器列表也回退到缓慢的本地查找。
   解决这一点需要纯 64 位镜像或 32 位模拟。
 
+## 传感器路径
+
+- Waydroid 自带的 sensors HAL（1.0）没有任何传感器。guest 另外装上 Android 13
+  模拟器的 HAL（2.1 multihal + goldfish「ranchu」sub-HAL，由
+  `scripts/sensors/fetch-hal.py` 获取预编译件），SensorService 优先选它。它的
+  `/dev/goldfish_pipe` 被预加载的 `libvine_sensors_shim` 换成
+  `/run/user/1000/vine-sensors`，由 `vine_sensors`（`app/src/main/cpp/sensors/`）
+  通过 NDK 传感器 API 读手机的传感器，按模拟器的 `qemud:sensors` 协议提供。
+- HIDL 接口库（`android.hardware.sensors@2.0/2.1.so`）必须用镜像自己编译的：
+  Waydroid 的 libhidlbase 在 `IBinder` 里多了一个虚函数，按 AOSP 编译的桩在
+  第一次调用时就会崩溃。
+- 已声明却始终注册不上的 HAL 会让 system_server 永远卡在 SensorService，所以没有
+  `vine_sensors` 时，shim 在本地应答「没有传感器」。连续型传感器只在 App 处于
+  前台时才有数据。
+
 ## Rootfs 准备（宿主契约）
 
 引擎必须对解包后的镜像做的事情：应用的免 root 引擎在每次启动前于

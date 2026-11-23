@@ -406,6 +406,32 @@ test(maps_partial_trailing_line_still_rewritten)
 		"c000-d000 r-xp 00000000 00:00 1 /usr/bin/sh");
 }
 
+/* The rootfs sits under the app's data dir: guest files keep their
+ * lines (translated); only the engine's own files outside it go. */
+test(maps_hides_engine_files_but_not_the_guests)
+{
+	const char rootfs[] = "/data/data/com.hexadecinull.vineos/files/i/rootless/rootfs";
+	tawcroot_proc_rewrite_ctx ctx = {
+		.rootfs_host_path     = rootfs,
+		.rootfs_host_path_len = sizeof rootfs - 1,
+		.binds                = nullptr,
+		.n_binds              = 0,
+	};
+	const char in[] =
+		"1000-2000 r-xp 00000000 fe:49 1 /data/data/com.hexadecinull.vineos/files/i/rootless/rootfs/system/lib64/libc.so\n"
+		"2000-3000 r-xp 00000000 fe:49 2 /data/app/~~x==/com.hexadecinull.vineos-y==/lib/arm64/libtawcroot.so\n"
+		"3000-4000 r--p 00000000 fe:49 3 /data/data/com.hexadecinull.vineos/files/i/rootless/tawcroot/owners\n"
+		"4000-5000 r--p 00000000 fe:49 4 /data/data/com.hexadecinull.vineos/files/i/rootless/rootfs/vendor/lib64/libvine_sensors_shim.so\n";
+	char out[1024];
+	long n = tawcroot_proc_maps_rewrite(&ctx, in, strlen(in),
+					    out, sizeof out);
+	test_int_eq(n > 0, 1);
+	out[n] = 0;
+	test_str_eq(out,
+		"1000-2000 r-xp 00000000 fe:49 1 /system/lib64/libc.so\n"
+		"4000-5000 r--p 00000000 fe:49 4 /vendor/lib64/libvine_sensors_shim.so\n");
+}
+
 test(maps_output_too_small_returns_nospc)
 {
 	tawcroot_proc_rewrite_ctx ctx = {

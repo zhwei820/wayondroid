@@ -1,0 +1,346 @@
+/* vine_sensors --socket PATH [--package NAME]
+ *
+ * The phone's sensors for a rootless guest. The guest runs the emulator's
+ * sensors HAL (android.hardware.sensors@2.1 multihal with the goldfish
+ * "ranchu" sub-HAL), whose /dev/goldfish_pipe libvine_sensors_shim turns
+ * into a connection to PATH. One guest at a time; a new connection
+ * replaces the old one (the HAL service restarted).
+ *
+ * The wire is the emulator's "qemud:sensors" channel: the guest first
+ * writes "pipe:qemud:sensors\0", then both sides send frames of a 4-digit
+ * hex length and the text. The guest sends "list-sensors" (answered with
+ * the decimal mask of the sensors there are, bit = goldfish sensor
+ * handle), "set:NAME:0|1" and "set-delay:MS"; we send "NAME:v[:v:v]"
+ * events. Handles, names and value formats follow the goldfish sub-HAL
+ * (device/generic/goldfish/sensors, android14 branch): set names and
+ * event names differ for the magnetic field.
+ *
+ * Continuous sensors only deliver while the app's uid is in the
+ * foreground (SensorService's policy for idle uids). */
+#include <android/looper.h>
+#include <android/sensor.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#define LOOPER_ID_SENSORS 1
+#define MIN_DELAY_MS 5   /* 200 Hz, the most an app gets without HIGH_SAMPLING_RATE_SENSORS */
+
+struct map {
+    int bit;              /* goldfish sensor handle */
+    int type;             /* ASENSOR_TYPE_* */
+    const char* set_name; /* in set:NAME:x */
+    const char* event;    /* event prefix */
+    int values;           /* 1 or 3 */
+};
+
+static const struct map kMap[] = {
+    {0, ASENSOR_TYPE_ACCELEROMETER, "acceleration", "acceleration", 3},
+    {1, ASENSOR_TYPE_GYROSCOPE, "gyroscope", "gyroscope", 3},
+    {2, ASENSOR_TYPE_MAGNETIC_FIELD, "magnetic-field", "magnetic", 3},
+    {4, ASENSOR_TYPE_AMBIENT_TEMPERATURE, "temperature", "temperature", 1},
+    {5, ASENSOR_TYPE_PROXIMITY, "proximity", "proximity", 1},
+    {6, ASENSOR_TYPE_LIGHT, "light", "light", 1},
+    {7, ASENSOR_TYPE_PRESSURE, "pressure", "pressure", 1},
+    {8, ASENSOR_TYPE_RELATIVE_HUMIDITY, "humidity", "humidity", 1},
+    {9, ASENSOR_TYPE_MAGNETIC_FIELD_UNCALIBRATED, "magnetic-field-uncalibrated", "magnetic-uncalibrated", 3},
+    {17, ASENSOR_TYPE_ACCELEROMETER_UNCALIBRATED, "acceleration-uncalibrated", "acceleration-uncalibrated", 3},
+};
+#define NMAP (sizeof kMap / sizeof kMap[0])
+
+static struct {
+    ASensorManager* manager;
+    ASensorEventQueue* queue;
+    ALooper* looper;
+    const ASensor* sensor[NMAP];
+    bool enabled[NMAP];
+    int delay_ms;
+    int client;
+    bool hello_done;
+    char in[512];
+    size_t in_len;
+} g = {.delay_ms = 200, .client = -1};
+
+static void logmsg(const char* fmt, const char* a)
+{
+    fprintf(stderr, "vine_sensors: ");
+    fprintf(stderr, fmt, a);
+    fputc('\n', stderr);
+}
+
+static uint32_t mask(void)
+{
+    uint32_t m = 0;
+    for (size_t i = 0; i < NMAP; i++)
+        if (g.sensor[i]) m |= 1u << kMap[i].bit;
+    return m;
+}
+
+/* Frames are small; a guest that stops reading loses events instead of
+ * stalling the loop. */
+static void send_frame(const char* text)
+{
+    if (g.client < 0) return;
+    char buf[160];
+    const int len = (int)strlen(text);
+    const int n = snprintf(buf, sizeof buf, "%04x%s", len, text);
+    if (n <= 0 || n >= (int)sizeof buf) return;
+    send(g.client, buf, (size_t)n, MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
+static void apply_rate(size_t i)
+{
+    int us = (g.delay_ms < MIN_DELAY_MS ? MIN_DELAY_MS : g.delay_ms) * 1000;
+    const int min_us = ASensor_getMinDelay(g.sensor[i]);
+    if (min_us > 0 && us < min_us) us = min_us;
+    ASensorEventQueue_setEventRate(g.queue, g.sensor[i], us);
+}
+
+static void enable(size_t i, bool on)
+{
+    if (!g.sensor[i] || g.enabled[i] == on) return;
+    if (on) {
+        if (ASensorEventQueue_enableSensor(g.queue, g.sensor[i]) < 0) {
+            logmsg("cannot enable %s", kMap[i].set_name);
+            return;
+        }
+        apply_rate(i);
+    } else {
+        ASensorEventQueue_disableSensor(g.queue, g.sensor[i]);
+    }
+    g.enabled[i] = on;
+}
+
+static void disable_all(void)
+{
+    for (size_t i = 0; i < NMAP; i++) enable(i, false);
+}
+
+static void drop_client(void)
+{
+    if (g.client < 0) return;
+    ALooper_removeFd(g.looper, g.client);
+    close(g.client);
+    g.client = -1;
+    disable_all();
+    logmsg("%s", "guest gone");
+}
+
+static void handle_command(const char* msg)
+{
+    if (strcmp(msg, "list-sensors") == 0) {
+        char m[16];
+        snprintf(m, sizeof m, "%u", mask());
+        send_frame(m);
+        return;
+    }
+    int delay;
+    if (sscanf(msg, "set-delay:%d", &delay) == 1) {
+        g.delay_ms = delay;
+        for (size_t i = 0; i < NMAP; i++)
+            if (g.enabled[i]) apply_rate(i);
+        return;
+    }
+    if (strncmp(msg, "set:", 4) == 0) {
+        const char* name = msg + 4;
+        const char* colon = strrchr(name, ':');
+        if (!colon) return;
+        for (size_t i = 0; i < NMAP; i++) {
+            if (strlen(kMap[i].set_name) == (size_t)(colon - name) && !strncmp(kMap[i].set_name, name, colon - name)) {
+                enable(i, colon[1] == '1');
+                return;
+            }
+        }
+        return;
+    }
+    /* "time:NS" (the guest's clock) needs no answer: the HAL stamps
+     * events with its own clock */
+}
+
+/* Consumes the hello, then every complete frame in g.in */
+static void parse_input(void)
+{
+    size_t pos = 0;
+    if (!g.hello_done) {
+        char* nul = memchr(g.in, 0, g.in_len);
+        if (!nul) {
+            if (g.in_len == sizeof g.in) drop_client();
+            return;
+        }
+        pos = (size_t)(nul - g.in) + 1;
+        g.hello_done = true;
+    }
+    for (;;) {
+        if (g.in_len - pos < 4) break;
+        char hdr[5] = {0};
+        memcpy(hdr, g.in + pos, 4);
+        char* end;
+        const unsigned long len = strtoul(hdr, &end, 16);
+        if (*end || len >= sizeof g.in - 4) {
+            drop_client();
+            return;
+        }
+        if (g.in_len - pos - 4 < len) break;
+        char msg[sizeof g.in];
+        memcpy(msg, g.in + pos + 4, len);
+        msg[len] = 0;
+        pos += 4 + len;
+        handle_command(msg);
+        if (g.client < 0) return;
+    }
+    memmove(g.in, g.in + pos, g.in_len - pos);
+    g.in_len -= pos;
+}
+
+static int on_client(int fd, int events, void* data)
+{
+    (void)data;
+    if (fd != g.client) return 0;
+    if (events & (ALOOPER_EVENT_ERROR | ALOOPER_EVENT_HANGUP) && !(events & ALOOPER_EVENT_INPUT)) {
+        drop_client();
+        return 0;
+    }
+    const ssize_t n = recv(fd, g.in + g.in_len, sizeof g.in - g.in_len, MSG_DONTWAIT);
+    if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR)) {
+        drop_client();
+        return 0;
+    }
+    if (n > 0) {
+        g.in_len += (size_t)n;
+        parse_input();
+    }
+    return g.client >= 0 ? 1 : 0;
+}
+
+static int on_listen(int fd, int events, void* data)
+{
+    (void)events;
+    (void)data;
+    const int c = accept4(fd, NULL, NULL, SOCK_CLOEXEC);
+    if (c < 0) return 1;
+    drop_client();
+    g.client = c;
+    g.hello_done = false;
+    g.in_len = 0;
+    ALooper_addFd(g.looper, c, 0, ALOOPER_EVENT_INPUT, on_client, NULL);
+    logmsg("%s", "guest connected");
+    return 1;
+}
+
+static void forward(const ASensorEvent* e)
+{
+    for (size_t i = 0; i < NMAP; i++) {
+        if (kMap[i].type != e->type || !g.enabled[i]) continue;
+        char text[128];
+        if (kMap[i].values == 1) {
+            float v = e->data[0];
+            /* The goldfish proximity sensor's range is 1: 0 is near, 1
+             * far. Phones report cm (most just 0 or their range). */
+            if (e->type == ASENSOR_TYPE_PROXIMITY) v = v < 1.0f ? 0.0f : 1.0f;
+            snprintf(text, sizeof text, "%s:%g", kMap[i].event, v);
+        } else {
+            snprintf(text, sizeof text, "%s:%g:%g:%g", kMap[i].event, e->data[0], e->data[1], e->data[2]);
+        }
+        send_frame(text);
+        return;
+    }
+}
+
+static int on_sensors(int fd, int events, void* data)
+{
+    (void)fd;
+    (void)events;
+    (void)data;
+    ASensorEvent ev[16];
+    ssize_t n;
+    while ((n = ASensorEventQueue_getEvents(g.queue, ev, 16)) > 0)
+        for (ssize_t i = 0; i < n; i++) forward(&ev[i]);
+    return 1;
+}
+
+static int listen_on(const char* path)
+{
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    if (strlen(path) >= sizeof sa.sun_path) return -1;
+    strcpy(sa.sun_path, path);
+    unlink(path);
+    const int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (s < 0) return -1;
+    if (bind(s, (struct sockaddr*)&sa, sizeof sa) != 0 || listen(s, 2) != 0) {
+        close(s);
+        return -1;
+    }
+    /* The guest's HAL runs as another guest uid, but the same host uid */
+    chmod(path, 0666);
+    return s;
+}
+
+/* SensorService checks app ops against the caller's package: the app's,
+ * from where it installed us (/data/app/<...>/<package>-<suffix>/lib/<abi>/) */
+static const char* own_package(char* buf, size_t size)
+{
+    char exe[512];
+    const ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (n <= 0) return NULL;
+    exe[n] = 0;
+    char* lib = strstr(exe, "/lib/");
+    if (!lib) return NULL;
+    *lib = 0;
+    const char* dir = strrchr(exe, '/');
+    if (!dir) return NULL;
+    snprintf(buf, size, "%s", dir + 1);
+    /* Package names have no '-'; the base64 suffix can */
+    char* dash = strchr(buf, '-');
+    if (dash) *dash = 0;
+    return buf[0] ? buf : NULL;
+}
+
+int main(int argc, char** argv)
+{
+    const char* path = NULL;
+    const char* package = NULL;
+    for (int i = 1; i + 1 < argc; i += 2) {
+        if (!strcmp(argv[i], "--socket")) path = argv[i + 1];
+        else if (!strcmp(argv[i], "--package")) package = argv[i + 1];
+    }
+    char package_buf[256];
+    if (!package) package = own_package(package_buf, sizeof package_buf);
+    if (!package) package = "com.hexadecinull.vineos";
+    if (!path) {
+        fprintf(stderr, "usage: vine_sensors --socket PATH [--package NAME]\n");
+        return 2;
+    }
+    signal(SIGPIPE, SIG_IGN);
+    g.looper = ALooper_prepare(0);
+    g.manager = ASensorManager_getInstanceForPackage(package);
+    if (!g.manager) {
+        logmsg("%s", "no sensor manager");
+        return 1;
+    }
+    for (size_t i = 0; i < NMAP; i++) {
+        g.sensor[i] = ASensorManager_getDefaultSensor(g.manager, kMap[i].type);
+        if (g.sensor[i]) logmsg("has %s", kMap[i].set_name);
+    }
+    g.queue = ASensorManager_createEventQueue(g.manager, g.looper, LOOPER_ID_SENSORS, on_sensors, NULL);
+    if (!g.queue) {
+        logmsg("%s", "cannot create an event queue");
+        return 1;
+    }
+    const int s = listen_on(path);
+    if (s < 0) {
+        logmsg("cannot listen on %s", path);
+        return 1;
+    }
+    ALooper_addFd(g.looper, s, 0, ALOOPER_EVENT_INPUT, on_listen, NULL);
+    fprintf(stderr, "vine_sensors: serving mask %#x on %s for %s\n", mask(), path, package);
+    for (;;) ALooper_pollOnce(-1, NULL, NULL, NULL);
+}

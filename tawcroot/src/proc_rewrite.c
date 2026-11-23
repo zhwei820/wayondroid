@@ -166,7 +166,10 @@ static long out_write(char *out, size_t out_cap, size_t *off,
 
 /* The engine's own mappings (libtawcroot.so from the host app's lib
  * dir, its store files, memfds and fastpath stubs): an app would read
- * them as a foreign library injected into its process. */
+ * them as a foreign library injected into its process. Only for paths
+ * outside the guest's view: the whole rootfs lives under the app's data
+ * dir, and hiding its files would hide the guest's own libc and APKs
+ * (security SDKs then call the app tampered with). */
 static int maps_line_hidden(const char *p, size_t n)
 {
 	static const char *const marks[] = { "tawcroot", "com.hexadecinull.vineos", "libvine_" };
@@ -212,7 +215,10 @@ long tawcroot_proc_maps_rewrite(
 		 *   - anything else → emit verbatim (defensive) */
 		const char *p = line + path_off;
 		int do_rewrite = (path_len > 0 && p[0] == '/');
-		if (maps_line_hidden(p, path_len)) {
+		size_t plen = do_rewrite ? split_deleted_tag(p, path_len) : path_len;
+		long   rl   = do_rewrite ? tawcroot_proc_reverse_translate_path(
+			ctx, p, plen, xlated, TAWCROOT_PATH_SCRATCH_SIZE) : 0;
+		if (rl <= 0 && maps_line_hidden(p, path_len)) {
 			i = has_nl ? line_end + 1 : line_end;
 			continue;
 		}
@@ -222,13 +228,8 @@ long tawcroot_proc_maps_rewrite(
 		if (e < 0) return e;
 
 		if (do_rewrite) {
-			/* Reverse-translate only the path proper; the kernel
+			/* Reverse-translated only the path proper; the kernel
 			 * " (deleted)" tag, if any, is re-attached verbatim. */
-			size_t plen = split_deleted_tag(p, path_len);
-
-			long rl = tawcroot_proc_reverse_translate_path(
-				ctx, p, plen, xlated,
-				TAWCROOT_PATH_SCRATCH_SIZE);
 			if (rl > 0) {
 				e = out_write(out, out_cap, &out_off,
 					      xlated, (size_t)rl);

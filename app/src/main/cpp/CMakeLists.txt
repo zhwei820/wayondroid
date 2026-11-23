@@ -109,6 +109,11 @@ add_executable(vine_pulse
 target_link_libraries(vine_pulse PRIVATE aaudio)
 target_link_options(vine_pulse PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-size=16384)
 
+# Rootless guest sensors: the phone's sensors for the guest's goldfish sensors HAL
+add_executable(vine_sensors sensors/vine_sensors.c)
+target_link_libraries(vine_sensors PRIVATE ${android-lib})
+target_link_options(vine_sensors PRIVATE -pie -Wl,-z,max-page-size=16384)
+
 # Copied into the guest as its audio HAL service on hosts without AArch32 (the image's is 32-bit only)
 add_executable(vine_hal_service rootless/hal_service.cpp)
 target_link_libraries(vine_hal_service PRIVATE dl)
@@ -126,7 +131,13 @@ target_compile_options(vine_vold_shim PRIVATE -fvisibility=hidden)
 target_link_libraries(vine_vold_shim PRIVATE dl)
 target_link_options(vine_vold_shim PRIVATE -Wl,-z,max-page-size=16384)
 
-foreach(tool vine_wl vine_lmkd vine_pulse vine_hal_service)
+# Preloaded into the guest's sensors HAL service: its emulator pipe leads to vine_sensors
+add_library(vine_sensors_shim SHARED rootless/sensors_shim.c)
+target_compile_options(vine_sensors_shim PRIVATE -fvisibility=hidden)
+target_link_libraries(vine_sensors_shim PRIVATE dl)
+target_link_options(vine_sensors_shim PRIVATE -Wl,-z,max-page-size=16384)
+
+foreach(tool vine_wl vine_lmkd vine_pulse vine_sensors vine_hal_service)
     set_target_properties(${tool} PROPERTIES PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "${tool}")
     if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
         set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")

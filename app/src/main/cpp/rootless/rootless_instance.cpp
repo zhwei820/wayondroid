@@ -312,6 +312,10 @@ bool Instance::launch_services(std::string* error) {
                      "--refresh", std::to_string(std::clamp(cfg_.refresh_hz, 1, 240))},
                     W, layout_.logs + "/vine_wl.log");
     pulse_pid_ = spawn({lib + "libvine_pulse.so", "--socket", "run/pulse/native"}, W, layout_.logs + "/vine_pulse.log");
+    // Optional: without it the guest's sensors HAL reports no sensors
+    if (is_regular_file(lib + "libvine_sensors.so")) {
+        sensors_pid_ = spawn({lib + "libvine_sensors.so", "--socket", "run/vine-sensors"}, W, layout_.logs + "/vine_sensors.log");
+    }
     // The guest's GPU and gralloc service, its sockets in /run/user/1000
     if (cfg_.gpu) {
         kumquat_pid_ = spawn({lib + "libvine_kumquat.so", "kumquat-gpu-0", "vine-gralloc",
@@ -435,6 +439,7 @@ void Instance::poll() {
         return fail("The GPU server exited (" + std::to_string(code) + ")");
     }
     if (exited(pulse_pid_, nullptr)) pulse_pid_ = -1; // the guest goes on without sound
+    if (exited(sensors_pid_, nullptr)) sensors_pid_ = -1; // and without sensor events
     if (phase_ == Phase::Booting) {
         if (path_exists(layout_.run + "/boot_completed")) {
             booted_ = true;
@@ -460,6 +465,7 @@ void Instance::teardown() {
     reap(kumquat_pid_, SIGTERM, 2000);
     reap(wl_pid_, SIGTERM, 2000);
     reap(pulse_pid_, SIGTERM, 2000);
+    reap(sensors_pid_, SIGTERM, 2000);
     for (pid_t& p : detached_) reap(p, SIGKILL, 1000);
     detached_.clear();
     if (input_fd_ >= 0) close(input_fd_);
@@ -612,7 +618,7 @@ std::string Instance::diagnostics() const {
     if (!error_.empty()) out += "Error: " + error_ + "\n";
     out += "Instance: " + layout_.work + "\n";
     const std::pair<const char*, size_t> logs[] = {
-        {"prepare.log", 5}, {"init.log", 30}, {"binderd.log", 10}, {"vine_wl.log", 10}, {"vine_pulse.log", 5}, {"vine_kumquat.log", 10}};
+        {"prepare.log", 5}, {"init.log", 30}, {"binderd.log", 10}, {"vine_wl.log", 10}, {"vine_pulse.log", 5}, {"vine_sensors.log", 15}, {"vine_kumquat.log", 10}};
     for (const auto& [name, lines] : logs) {
         const std::string t = tail_file(layout_.logs + "/" + name, lines);
         if (!t.empty()) out += std::string("\n--- ") + name + "\n" + t;

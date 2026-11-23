@@ -134,6 +134,7 @@ rustup target add aarch64-linux-android
 git config --global --add safe.directory '*'
 
 scripts/gpu/build-gpu.sh          # 加 --clean 从头构建；首次要克隆并编译，模拟下可能一小时以上
+scripts/sensors/fetch-hal.py      # guest 的传感器 HAL（模拟器镜像里的预编译件，需要 debugfs）；不跑则 guest 没有传感器
 ./gradlew :app:assembleDebug --no-watch-fs
 ```
 

@@ -84,7 +84,7 @@ private:
     std::string error_;
     bool booted_ = false;
     int64_t phase_since_ms_ = 0;
-    pid_t prep_pid_ = -1, binderd_pid_ = -1, wl_pid_ = -1, pulse_pid_ = -1, kumquat_pid_ = -1, keeper_pid_ = -1, init_pid_ = -1;
+    pid_t prep_pid_ = -1, binderd_pid_ = -1, wl_pid_ = -1, pulse_pid_ = -1, sensors_pid_ = -1, kumquat_pid_ = -1, keeper_pid_ = -1, init_pid_ = -1;
     std::vector<pid_t> detached_;
     int input_fd_ = -1;
 };

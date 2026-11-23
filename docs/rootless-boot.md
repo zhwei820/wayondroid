@@ -52,6 +52,23 @@ posts each frame as a `wl_shm` buffer to `vine_wl`, which writes it into
   codec lists fall back to slow local lookups. Fixing that takes a
   64-bit-only image or 32-bit emulation.
 
+## Sensors path
+
+- Waydroid's own sensors HAL (1.0) has no sensors. The guest also gets
+  the Android 13 emulator's HAL (2.1 multihal + goldfish "ranchu"
+  sub-HAL, prebuilt by `scripts/sensors/fetch-hal.py`), which
+  SensorService prefers. Its `/dev/goldfish_pipe` becomes
+  `/run/user/1000/vine-sensors` (`libvine_sensors_shim`, preloaded), where
+  `vine_sensors` (`app/src/main/cpp/sensors/`) serves the phone's sensors
+  through the NDK sensor API in the emulator's `qemud:sensors` protocol.
+- The HIDL interface libraries (`android.hardware.sensors@2.0/2.1.so`)
+  must be the image's: Waydroid's libhidlbase has an extra `IBinder`
+  virtual, and AOSP-built stubs crash on the first call.
+- A declared HAL that never registers holds system_server at
+  SensorService forever, so without `vine_sensors` the shim answers
+  locally with no sensors. Continuous sensors deliver only while the
+  app is in the foreground.
+
 ## Rootfs preparation (host contract)
 
 What the engine must do to an extracted image: the app's rootless engine
