@@ -12,6 +12,7 @@
 #include "chroot.h"
 #include "dispatch.h"
 #include "errno_neg.h"
+#include "bpf_emul.h"
 #include "fdtab.h"
 #include "identity.h"
 #include "namespace.h"
@@ -91,6 +92,7 @@ void tawcroot_dispatch_init(void)
 	tawcroot_sysv_sem_register();
 	tawcroot_sysv_shm_register();
 	tawcroot_binder_register();
+	tawcroot_bpf_register();
 }
 
 size_t tawcroot_dispatch_trap_list(int *out, size_t out_cap)

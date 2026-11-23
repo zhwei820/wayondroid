@@ -12,6 +12,10 @@
  *     do vold's binds of the lower filesystem (pass-through, Android/data
  *     and obb): the rc's binds stand in for them, and more binds of the
  *     same directory would change which path a file's real path shows.
+ *   - vold's unmounts under /mnt/user and /mnt/pass_through succeed
+ *     without doing anything either: system_server restarting resets
+ *     vold, which unmounts every volume and mounts it again, and a real
+ *     unmount would take the rc's binds away for good.
  * Apps reach the files through the binds instead of the daemon. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -78,13 +82,43 @@ EXPORT int __open_2(const char *path, int flags)
     return real(path, flags);
 }
 
+/* vold builds some paths as "/" + "/data/media/..." */
+static const char *one_slash(const char *path)
+{
+    while (path[0] == '/' && path[1] == '/') path++;
+    return path;
+}
+
+static int is_storage_target(const char *path)
+{
+    if (!path) return 0;
+    path = one_slash(path);
+    return !strncmp(path, "/mnt/user/", 10) || !strncmp(path, "/mnt/pass_through/", 18);
+}
+
 EXPORT int mount(const char *source, const char *target, const char *type, unsigned long flags, const void *data)
 {
     static int (*real)(const char *, const char *, const char *, unsigned long, const void *);
     if (type && !strcmp(type, "fuse")) return 0;
     if ((flags & MS_BIND) && source &&
-        (!strncmp(source, "/data/media", 11) || !strncmp(source, "/mnt/pass_through/", 18)))
+        (!strncmp(one_slash(source), "/data/media", 11) || !strncmp(one_slash(source), "/mnt/pass_through/", 18)))
         return 0;
     if (!real) real = (int (*)(const char *, const char *, const char *, unsigned long, const void *))dlsym(RTLD_NEXT, "mount");
     return real(source, target, type, flags, data);
+}
+
+EXPORT int umount2(const char *target, int flags)
+{
+    static int (*real)(const char *, int);
+    if (is_storage_target(target)) return 0;
+    if (!real) real = (int (*)(const char *, int))dlsym(RTLD_NEXT, "umount2");
+    return real(target, flags);
+}
+
+EXPORT int umount(const char *target)
+{
+    static int (*real)(const char *);
+    if (is_storage_target(target)) return 0;
+    if (!real) real = (int (*)(const char *))dlsym(RTLD_NEXT, "umount");
+    return real(target);
 }

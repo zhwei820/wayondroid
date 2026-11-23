@@ -9,6 +9,9 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 
 namespace vine::rootless {
 
@@ -81,6 +84,27 @@ std::string with_service_option(const std::string& rc, const std::string& servic
 }
 
 // The rc that adapts init's services to an app sandbox
+// On a real device a dead zygote's apps go with it; under tawcroot they
+// outlive it as init's children and keep what they held (WebView's data
+// dir lock), so the restarted framework's copies of them crash. They are
+// init's children that are not init services (init.svc_debug_pid.*, set on
+// userdebug builds); init's own child (subcontext) runs /system/bin/init.
+const char kReapOrphans[] =
+    "#!/system/bin/sh\n"
+    "sm=$(getprop init.svc_debug_pid.servicemanager)\n"
+    "initpid=$(sed -n 's/^PPid:[[:space:]]*//p' /proc/$sm/status 2>/dev/null)\n"
+    "[ -n \"$initpid\" ] || exit 0\n"
+    "services=\" $(getprop | sed -n 's/^\\[init\\.svc_debug_pid\\.[^]]*\\]: \\[\\([0-9]*\\)\\]$/\\1/p' | tr '\\n' ' ') \"\n"
+    "for d in /proc/[0-9]*; do\n"
+    "    p=${d#/proc/}\n"
+    "    [ \"$p\" = \"$$\" ] && continue\n"
+    "    pp=$(sed -n 's/^PPid:[[:space:]]*//p' $d/status 2>/dev/null)\n"
+    "    [ \"$pp\" = \"$initpid\" ] || continue\n"
+    "    case \"$services\" in *\" $p \"*) continue ;; esac\n"
+    "    case \"$(head -c 16 $d/cmdline 2>/dev/null | tr '\\0' ' ')\" in init\\ *|/system/bin/init*) continue ;; esac\n"
+    "    kill -9 $p\n"
+    "done\n";
+
 std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
     std::string rc =
         // lmkd needs PSI or memcg, both closed to apps: vine_lmkd kills
@@ -146,15 +170,20 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         // VALIDATED, and DownloadManager's jobs (which need a validated
         // network) wait forever. Probe vendor generate_204 endpoints that
         // answer from China. Settings persist; the first boot re-probes
-        // with them on NetworkMonitor's next retry.
-        "    exec_background - system system -- /system/bin/cmd settings put global captive_portal_https_url "
+        // with them on NetworkMonitor's next retry. As root: `cmd settings`
+        // writes as com.android.shell, which uid 1000 fails to own (exit 255).
+        "    exec_background - root root -- /system/bin/cmd settings put global captive_portal_https_url "
         "https://connect.rom.miui.com/generate_204\n"
-        "    exec_background - system system -- /system/bin/cmd settings put global captive_portal_http_url "
+        "    exec_background - root root -- /system/bin/cmd settings put global captive_portal_http_url "
         "http://connectivitycheck.platform.hicloud.com/generate_204\n"
-        "    exec_background - system system -- /system/bin/cmd settings put global captive_portal_fallback_url "
+        "    exec_background - root root -- /system/bin/cmd settings put global captive_portal_fallback_url "
         "http://wifi.vivo.com.cn/generate_204\n"
-        "    exec_background - system system -- /system/bin/cmd settings put global captive_portal_other_fallback_urls "
-        "http://conn1.oppomobile.com/generate_204\n";
+        "    exec_background - root root -- /system/bin/cmd settings put global captive_portal_other_fallback_urls "
+        "http://conn1.oppomobile.com/generate_204\n"
+        "\n"
+        // system_server died and zygote with it: see kReapOrphans
+        "on property:init.svc.zygote=restarting\n"
+        "    exec_background - root root -- /system/bin/sh /product/etc/vine/reap_orphans.sh\n";
     if (own_audio_hal) {
         // The image's audio HAL service is 32-bit only; its 64-bit
         // implementations are served by our passthrough service
@@ -385,6 +414,120 @@ std::string props_64bit_only(const std::string& build_prop) {
     return out;
 }
 
+DeviceIdentity host_identity() {
+    DeviceIdentity id;
+#if defined(__ANDROID__)
+    auto get = [](const char* key) {
+        char value[PROP_VALUE_MAX] = {};
+        __system_property_get(key, value);
+        return std::string(value);
+    };
+    id.brand = get("ro.product.brand");
+    id.manufacturer = get("ro.product.manufacturer");
+    id.model = get("ro.product.model");
+    id.name = get("ro.product.name");
+    id.device = get("ro.product.device");
+    id.board = get("ro.product.board");
+    id.incremental = get("ro.build.version.incremental");
+    id.hardware = get("ro.hardware");
+#endif
+    return id;
+}
+
+namespace {
+
+// ro.product.<field> or ro.product.<partition>.<field>: the field, else ""
+std::string product_field(const std::string& key) {
+    if (key.rfind("ro.product.", 0) != 0) return "";
+    std::string rest = key.substr(11);
+    const size_t dot = rest.find('.');
+    if (dot != std::string::npos) rest = rest.substr(dot + 1);
+    return rest.find('.') == std::string::npos ? rest : "";
+}
+
+// ro.build.<field> or ro.<partition>.build.<field> (ro.product.build.* too):
+// the field, possibly dotted (version.incremental), else ""
+std::string build_field(const std::string& key) {
+    if (key.rfind("ro.build.", 0) == 0) return key.substr(9);
+    if (key.rfind("ro.", 0) != 0) return "";
+    const size_t dot = key.find('.', 3);
+    if (dot == std::string::npos || key.compare(dot, 7, ".build.") != 0) return "";
+    return key.substr(dot + 7);
+}
+
+std::vector<std::string> words_of(const std::string& text) {
+    std::vector<std::string> words;
+    for (size_t a = 0; a < text.size();) {
+        const size_t b = text.find(' ', a);
+        words.push_back(text.substr(a, b == std::string::npos ? std::string::npos : b - a));
+        if (b == std::string::npos) break;
+        a = b + 1;
+    }
+    return words;
+}
+
+} // namespace
+
+std::string props_device(const std::string& build_prop, const DeviceIdentity& id) {
+    if (id.empty()) return build_prop;
+    const std::string incremental = id.incremental.empty() ? "release" : id.incremental;
+    std::string out;
+    size_t pos = 0;
+    while (pos < build_prop.size()) {
+        size_t nl = build_prop.find('\n', pos);
+        const bool has_nl = nl != std::string::npos;
+        std::string line = build_prop.substr(pos, has_nl ? nl - pos : std::string::npos);
+        pos = has_nl ? nl + 1 : build_prop.size();
+        const size_t eq = line.find('=');
+        if (eq != std::string::npos && !line.empty() && line[0] != '#') {
+            const std::string key = line.substr(0, eq), value = line.substr(eq + 1);
+            const std::string product = product_field(key), build = build_field(key);
+            const char* set = nullptr;
+            std::string made;
+            if (product == "brand") set = id.brand.c_str();
+            else if (product == "manufacturer") set = id.manufacturer.c_str();
+            else if (product == "model") set = id.model.c_str();
+            else if (product == "name") set = id.name.c_str();
+            else if (product == "device") set = id.device.c_str();
+            else if (product == "board" && !id.board.empty()) set = id.board.c_str();
+            else if (build == "type") set = "user";
+            else if (build == "tags") set = "release-keys";
+            else if (build == "version.incremental") set = incremental.c_str();
+            else if (build == "user") set = "android-build";
+            else if (build == "host") set = "localhost";
+            else if (build == "product") set = id.device.c_str();
+            else if (build == "flavor") set = (made = id.name + "-user").c_str();
+            else if (build == "fingerprint") {
+                // <brand>/<name>/<device>:<release>/<id>/<incremental>:<type>/<tags>
+                const size_t colon = value.find(':');
+                const size_t s1 = colon == std::string::npos ? colon : value.find('/', colon + 1);
+                const size_t s2 = s1 == std::string::npos ? s1 : value.find('/', s1 + 1);
+                if (s2 != std::string::npos)
+                    set = (made = id.brand + "/" + id.name + "/" + id.device + ":" + value.substr(colon + 1, s1 - colon - 1) + "/" +
+                                  value.substr(s1 + 1, s2 - s1 - 1) + "/" + incremental + ":user/release-keys").c_str();
+            } else if (build == "description" || build == "display.id") {
+                // Waydroid's "<flavor> <release> <id> <incremental> <tags>"; ours has the same five words
+                const auto w = words_of(value);
+                if (w.size() == 5)
+                    set = (made = build == "display.id" ? w[2] + " release-keys"
+                                                        : id.name + "-user " + w[1] + " " + w[2] + " " + incremental + " release-keys")
+                              .c_str();
+            }
+            if (set) line = key + "=" + set;
+        }
+        out += line;
+        if (has_nl) out += "\n";
+    }
+    return out;
+}
+
+std::string guest_cmdline(const DeviceIdentity& id) {
+    std::string out;
+    if (!id.hardware.empty()) out += "androidboot.hardware=" + id.hardware + " ";
+    return out + "androidboot.verifiedbootstate=green androidboot.flash.locked=1 "
+                 "androidboot.vbmeta.device_state=locked androidboot.veritymode=enforcing\n";
+}
+
 std::vector<std::pair<std::string, std::string>> parse_environ_rc(const std::string& text) {
     std::vector<std::pair<std::string, std::string>> env;
     for (const auto& raw : split_lines(text)) {
@@ -471,6 +614,25 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // waydroid_arm64_only ships a 64-bit one)
     const bool own_audio_hal = !o.host_has_32bit && is_regular_file(hal_service) &&
                                is_elf32(R + "/vendor/bin/hw/android.hardware.audio.service");
+    // The phone's identity instead of Waydroid's (apps reading Build.* or
+    // the fingerprint see a release build of this phone, on Android 13)
+    const DeviceIdentity id = host_identity();
+    if (!id.empty()) {
+        for (const char* f : {"/system/build.prop", "/system/system_ext/etc/build.prop", "/system/product/etc/build.prop",
+                              "/vendor/build.prop", "/vendor/odm/etc/build.prop", "/vendor/vendor_dlkm/etc/build.prop",
+                              "/odm/etc/build.prop"}) {
+            const auto text = read_file(R + f);
+            if (!text) continue;
+            std::string edited = props_device(*text, id);
+            // Build.BOARD: Waydroid sets no ro.product.board at all
+            if (!strcmp(f, "/system/build.prop") && !id.board.empty() && edited.find("\nro.product.board=") == std::string::npos)
+                edited += (edited.empty() || edited.back() == '\n' ? "" : "\n") + std::string("ro.product.board=") + id.board + "\n";
+            if (edited != *text && !write_mode(R + f, edited, 0644, error)) return false;
+        }
+    }
+    // tawcroot serves it as /proc/cmdline (ro.hardware, verified boot); apps
+    // are denied it, as on a phone
+    if (!write_mode(l.store + "/cmdline", guest_cmdline(id), 0644, error)) return false;
     if (!o.host_has_32bit) {
         for (const char* f : {"/system/build.prop", "/vendor/build.prop", "/vendor/odm/etc/build.prop"}) {
             const auto text = read_file(R + f);
@@ -517,6 +679,8 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // $R/product is an absolute symlink, its files are in system/product
     const std::string product_init = R + "/system/product/etc/init";
     if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu, o.ram_mb), 0644, error)) return false;
+    const std::string product_vine = R + "/system/product/etc/vine";
+    if (!mkdirs_or_fail(product_vine, error) || !write_mode(product_vine + "/reap_orphans.sh", kReapOrphans, 0755, error)) return false;
     if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi, o.gpu), 0644, error)) return false;
     if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))

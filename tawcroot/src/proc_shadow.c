@@ -6,8 +6,10 @@
 #include <sys/stat.h>
 
 #include "errno_neg.h"
+#include "identity.h"
 #include "io.h"
 #include "loader_exec.h"
+#include "linkstore.h"
 #include "loader_map.h"
 #include "path.h"
 #include "proc_rewrite.h"
@@ -29,7 +31,7 @@ int tawcroot_could_be_proc_relative(const char *p)
 {
 	static const char *const leaves[] = {
 		"maps", "stat", "version", "uptime", "loadavg", "devices",
-		"tcp", "tcp6", "overflowuid", "overflowgid", "cpuinfo",
+		"tcp", "tcp6", "overflowuid", "overflowgid", "cpuinfo", "cmdline",
 		"exe", "cwd", "root",
 	};
 	const char *leaf = p;
@@ -397,6 +399,8 @@ int tawcroot_proc_shadow_classify(const char *path)
 		return TAWCROOT_PROC_SHADOW_LOADAVG;
 	if (tawc_streq(path, "/proc/cpuinfo"))
 		return TAWCROOT_PROC_SHADOW_CPUINFO;
+	if (tawc_streq(path, "/proc/cmdline"))
+		return TAWCROOT_PROC_SHADOW_CMDLINE;
 	/* Last: the only kind whose match can cost a /proc/<n>/status
 	 * read (numeric-pid ownership resolution). */
 	if (is_proc_self_maps(path))
@@ -750,14 +754,54 @@ static long open_proc_cpuinfo_shadow(void)
 	return memfd;
 }
 
+/* An app (uid 10000+ in any user) sees what an app sees on a phone:
+ * /proc/cmdline and selinuxfs's enforce file are denied, and the status
+ * page says enforcing. The guest's own services keep the permissive view
+ * they need: nothing enforces the guest's policy, and their userspace
+ * checks (servicemanager, keystore) would deny everything if told
+ * otherwise. */
+static int guest_is_app(void)
+{
+	return tawcroot_identity_euid() % 100000 >= 10000;
+}
+
+static int denied_to_apps(int kind)
+{
+	return (kind == TAWCROOT_PROC_SHADOW_CMDLINE || kind == TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE) &&
+	       guest_is_app();
+}
+
+/* /proc/cmdline: the engine's <store>/cmdline (ro.hardware, verified boot
+ * state for init); empty without one, as the real file is unreadable. */
+static long open_proc_cmdline_shadow(void)
+{
+	char text[512];
+	long n = 0;
+	if (tawcroot_store_host_path_len) {
+		long dir = tawc_openat(AT_FDCWD, tawcroot_store_host_path,
+				       O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+		if (dir >= 0) {
+			long fd = tawc_openat((int)dir, "cmdline", O_RDONLY | O_CLOEXEC, 0);
+			tawc_close((int)dir);
+			if (fd >= 0) {
+				n = tawc_read((int)fd, text, sizeof text);
+				tawc_close((int)fd);
+				if (n < 0) n = 0;
+			}
+		}
+	}
+	return memfd_from_bytes("tawcroot-cmdline", text, (size_t)n);
+}
+
 /* selinuxfs status page (struct selinux_status_t): version 1, sequence
- * 0 (no update in progress), permissive, policy load 0, deny_unknown 0.
- * A whole page, because libselinux maps one. */
+ * 0 (no update in progress), enforcing for apps and permissive otherwise
+ * (see guest_is_app), policy load 0, deny_unknown 0. A whole page,
+ * because libselinux maps one. */
 static long open_selinux_status_shadow(void)
 {
 	long memfd = tawc_memfd_create("tawcroot-selinux-status", 1U /*MFD_CLOEXEC*/);
 	if (memfd < 0) return memfd;
-	const uint32_t status[5] = { 1, 0, 0, 0, 0 };
+	const uint32_t status[5] = { 1, 0, guest_is_app() ? 1u : 0u, 0, 0 };
 	if (TAWC_RAW(TAWC_SYS_ftruncate, memfd, 4096, 0, 0, 0, 0) != 0 ||
 	    TAWC_RAW(TAWC_SYS_pwrite64, memfd, (long)status, sizeof status, 0, 0, 0) != (long)sizeof status) {
 		tawc_close((int)memfd);
@@ -768,6 +812,7 @@ static long open_selinux_status_shadow(void)
 
 long tawcroot_proc_shadow_open(int kind)
 {
+	if (denied_to_apps(kind)) return TAWC_EACCES;
 	switch (kind) {
 	case TAWCROOT_PROC_SHADOW_TCP: return tawcroot_tcp_open(0);
 	case TAWCROOT_PROC_SHADOW_TCP6: return tawcroot_tcp_open(1);
@@ -793,6 +838,8 @@ long tawcroot_proc_shadow_open(int kind)
 		return memfd_from_bytes("tawcroot-selinux-enforce", "0", 1);
 	case TAWCROOT_PROC_SHADOW_CPUINFO:
 		return open_proc_cpuinfo_shadow();
+	case TAWCROOT_PROC_SHADOW_CMDLINE:
+		return open_proc_cmdline_shadow();
 	default:
 		return TAWC_EINVAL;
 	}
@@ -840,6 +887,7 @@ long tawcroot_proc_shadow_stat(int kind, struct stat *out)
 	if (kind <= TAWCROOT_PROC_SHADOW_NONE ||
 	    kind > TAWCROOT_PROC_SHADOW_KIND_MAX)
 		return TAWC_EINVAL;
+	if (denied_to_apps(kind)) return TAWC_EACCES;
 	proc_dev_probe();
 	long sec, nsec;
 	realtime_now(&sec, &nsec);
@@ -867,6 +915,7 @@ long tawcroot_proc_shadow_statx(int kind, unsigned int mask,
 	if (kind <= TAWCROOT_PROC_SHADOW_NONE ||
 	    kind > TAWCROOT_PROC_SHADOW_KIND_MAX)
 		return TAWC_EINVAL;
+	if (denied_to_apps(kind)) return TAWC_EACCES;
 	proc_dev_probe();
 	long sec, nsec;
 	realtime_now(&sec, &nsec);
@@ -906,6 +955,7 @@ long tawcroot_proc_shadow_access(int kind, int mode)
 	if (kind <= TAWCROOT_PROC_SHADOW_NONE ||
 	    kind > TAWCROOT_PROC_SHADOW_KIND_MAX)
 		return TAWC_EINVAL;
+	if (denied_to_apps(kind)) return TAWC_EACCES;
 	/* The shadows are 0444 regular files: F_OK and R_OK pass, any
 	 * write or execute probe is -EACCES. faccessat carries no flags
 	 * and faccessat2-with-flags is already -ENOSYS'd by the handler,

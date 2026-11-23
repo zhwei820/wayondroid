@@ -168,6 +168,7 @@ PROD_C := \
     $(SRC_T)/src/syscalls_fd.c \
     $(SRC_T)/src/gamepad.c \
     $(SRC_T)/src/binder.c \
+    $(SRC_T)/src/bpf.c \
     $(SRC_T)/src/owners.c \
     $(SRC_T)/src/linkstore.c \
     $(SRC_T)/src/dirent_filter.c \

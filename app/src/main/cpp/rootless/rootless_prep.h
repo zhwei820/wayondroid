@@ -47,6 +47,26 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error);
 // `ro.zygote=zygote64`; other lines unchanged.
 std::string props_64bit_only(const std::string& build_prop);
 
+// The phone's identity, which the guest presents instead of Waydroid's
+struct DeviceIdentity {
+    std::string brand, manufacturer, model, name, device, board, incremental, hardware;
+    bool empty() const { return brand.empty() || model.empty() || device.empty(); }
+};
+
+// The phone's own ro.product.* and friends; empty off Android (host tests)
+DeviceIdentity host_identity();
+
+// A build.prop presenting `id` as a release build: every partition's
+// ro.product.<part>.{brand,manufacturer,model,name,device}, the build type
+// and tags (user, release-keys) and the fingerprints rebuilt from them,
+// keeping the image's Android release and build id. Other lines unchanged;
+// running it again changes nothing.
+std::string props_device(const std::string& build_prop, const DeviceIdentity& id);
+
+// /proc/cmdline as the guest's init reads it (through tawcroot, from
+// <store>/cmdline): ro.hardware and a locked, verified boot
+std::string guest_cmdline(const DeviceIdentity& id);
+
 // `export NAME VALUE` lines of an init.environ.rc
 std::vector<std::pair<std::string, std::string>> parse_environ_rc(const std::string& text);
 
