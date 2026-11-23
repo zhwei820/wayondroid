@@ -6,7 +6,10 @@
  * (the 42-row status bar) the last block row lands past the buffer, in
  * the next mapping, and the app dies with SEGV_ACCERR. Allocating a few
  * more rows gives those writes somewhere to go; consumers still use the
- * buffer's own width and height.
+ * buffer's own width and height. Widths get the same 4-pixel rounding,
+ * as the stride: a 377-wide popup came out sheared (one block-rounded
+ * row pitch against gralloc's tight one), every multiple-of-4 surface
+ * fine.
  *
  * With ro.vendor.vine.gpu=1 the guest renders through gfxstream and
  * buffers are host ColorBuffers instead (gralloc_gpu.c).
@@ -24,6 +27,7 @@
 #include "gralloc_gpu.h"
 
 #define PAD_ROWS 16
+#define PAD_COLS 4
 
 /* hardware/hardware.h and hardware/gralloc.h, which the NDK lacks */
 struct hw_module_t;
@@ -90,7 +94,8 @@ static const gralloc_module_t* load(void) {
 
 static int padded_alloc(alloc_device_t* dev, int w, int h, int format, int usage, buffer_handle_t* handle,
                         int* stride) {
-    return real_alloc(dev, w, (h + PAD_ROWS - 1) / PAD_ROWS * PAD_ROWS, format, usage, handle, stride);
+    return real_alloc(dev, (w + PAD_COLS - 1) / PAD_COLS * PAD_COLS, (h + PAD_ROWS - 1) / PAD_ROWS * PAD_ROWS, format,
+                      usage, handle, stride);
 }
 
 static int gpu_alloc(alloc_device_t* dev, int w, int h, int format, int usage, buffer_handle_t* handle,
