@@ -105,6 +105,26 @@ const char kReapOrphans[] =
     "    kill -9 $p\n"
     "done\n";
 
+// Now and then Waydroid's hwcomposer fails to register its display HAL
+// (-38: libhidl found no /dev/hwbinder from its display thread, while its
+// main thread registers IComposer just fine). That thread then ends;
+// SurfaceFlinger waits for the HAL forever, system_server for
+// SurfaceFlinger, and the guest never leaves the boot screen. A new
+// hwcomposer registers it: killed, init restarts it (and SurfaceFlinger).
+// SIGKILL, not ctl.restart: init's SIGTERM leaves it "stopping".
+const char kCheckDisplay[] =
+    "#!/system/bin/sh\n"
+    "svc=vendor.hwcomposer-2-1\n"
+    "pid=$(getprop init.svc_debug_pid.$svc)\n"
+    "[ -n \"$pid\" ] || exit 0\n"
+    "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do\n"
+    "    lshal list --neat -i 2>/dev/null | grep -q '^vendor.waydroid.display@' && exit 0\n"
+    "    [ \"$(getprop init.svc_debug_pid.$svc)\" = \"$pid\" ] || exit 0\n"
+    "    sleep 1\n"
+    "done\n"
+    "log -p w -t vine \"display HAL not registered in 20 s, killing hwcomposer $pid\"\n"
+    "kill -9 $pid\n";
+
 std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
     std::string rc =
         // lmkd needs PSI or memcg, both closed to apps: vine_lmkd kills
@@ -183,7 +203,11 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         "\n"
         // system_server died and zygote with it: see kReapOrphans
         "on property:init.svc.zygote=restarting\n"
-        "    exec_background - root root -- /system/bin/sh /product/etc/vine/reap_orphans.sh\n";
+        "    exec_background - root root -- /system/bin/sh /product/etc/vine/reap_orphans.sh\n"
+        "\n"
+        // see kCheckDisplay
+        "on property:init.svc.vendor.hwcomposer-2-1=running\n"
+        "    exec_background - root root -- /system/bin/sh /product/etc/vine/check_display.sh\n";
     if (own_audio_hal) {
         // The image's audio HAL service is 32-bit only; its 64-bit
         // implementations are served by our passthrough service
@@ -490,7 +514,11 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
             else if (product == "name") set = id.name.c_str();
             else if (product == "device") set = id.device.c_str();
             else if (product == "board" && !id.board.empty()) set = id.board.c_str();
-            else if (build == "type") set = "user";
+            // Build.TYPE stays userdebug: on user, system_server runs the
+            // boot-time VINTF check, which a guest cannot pass (no kernel
+            // sepolicy version or config, a kernel newer than the matrices
+            // know), and shows "There's an internal problem with your device"
+            else if (build == "type") set = "userdebug";
             else if (build == "tags") set = "release-keys";
             else if (build == "version.incremental") set = incremental.c_str();
             else if (build == "user") set = "android-build";
@@ -680,7 +708,9 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     const std::string product_init = R + "/system/product/etc/init";
     if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu, o.ram_mb), 0644, error)) return false;
     const std::string product_vine = R + "/system/product/etc/vine";
-    if (!mkdirs_or_fail(product_vine, error) || !write_mode(product_vine + "/reap_orphans.sh", kReapOrphans, 0755, error)) return false;
+    if (!mkdirs_or_fail(product_vine, error) || !write_mode(product_vine + "/reap_orphans.sh", kReapOrphans, 0755, error) ||
+        !write_mode(product_vine + "/check_display.sh", kCheckDisplay, 0755, error))
+        return false;
     if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi, o.gpu), 0644, error)) return false;
     if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))

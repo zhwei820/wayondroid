@@ -57,8 +57,8 @@ struct DeviceIdentity {
 DeviceIdentity host_identity();
 
 // A build.prop presenting `id` as a release build: every partition's
-// ro.product.<part>.{brand,manufacturer,model,name,device}, the build type
-// and tags (user, release-keys) and the fingerprints rebuilt from them,
+// ro.product.<part>.{brand,manufacturer,model,name,device}, release-keys
+// tags (the type stays userdebug) and user/release-keys fingerprints,
 // keeping the image's Android release and build id. Other lines unchanged;
 // running it again changes nothing.
 std::string props_device(const std::string& build_prop, const DeviceIdentity& id);
