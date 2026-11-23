@@ -539,11 +539,12 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
             else if (product == "name") set = id.name.c_str();
             else if (product == "device") set = id.device.c_str();
             else if (product == "board" && !id.board.empty()) set = id.board.c_str();
-            // Build.TYPE stays userdebug: on user, system_server runs the
-            // boot-time VINTF check, which a guest cannot pass (no kernel
-            // sepolicy version or config, a kernel newer than the matrices
-            // know), and shows "There's an internal problem with your device"
-            else if (build == "type") set = "userdebug";
+            // user, as risk SDKs (汽水音乐's) block userdebug. Costs a boot-time
+            // "There's an internal problem with your device" dialog: on user,
+            // Build.isBuildConsistent() runs the VINTF check, which a guest
+            // cannot pass (no kernel sepolicy version or config, a kernel
+            // newer than the matrices know). Nothing else reads that result.
+            else if (build == "type") set = "user";
             else if (build == "tags") set = "release-keys";
             else if (build == "version.incremental") set = incremental.c_str();
             else if (build == "user") set = "android-build";

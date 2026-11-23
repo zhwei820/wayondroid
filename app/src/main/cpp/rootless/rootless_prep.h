@@ -58,7 +58,7 @@ DeviceIdentity host_identity();
 
 // A build.prop presenting `id` as a release build: every partition's
 // ro.product.<part>.{brand,manufacturer,model,name,device}, release-keys
-// tags (the type stays userdebug), user/release-keys fingerprints, not
+// tags, user type, user/release-keys fingerprints, not
 // debuggable and adb off,
 // keeping the image's Android release and build id. Other lines unchanged;
 // running it again changes nothing.

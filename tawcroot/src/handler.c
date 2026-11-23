@@ -117,6 +117,119 @@ static volatile tawcroot_handler_obs g_obs;
 # define SYS_SECCOMP 1
 #endif
 
+#ifdef TAWCROOT_PATHTRACE
+/* Diagnostics build only: what one app probes. Path syscalls of the uid
+ * named in <store>/trace_uid go to <store>/trace.log as
+ * "pid nr rv path". The log is opened per line so the app never sees
+ * an extra fd. */
+#include <fcntl.h>
+#include "identity.h"
+#include "linkstore.h"
+#include "sysnr.h"
+
+static long pathtrace_uid = -2;
+/* Built once; the handler's stack is limited to 1 KiB */
+static char pathtrace_uid_path[4200], pathtrace_log_path[4200];
+
+static __attribute__((noinline)) void pathtrace_init(void)
+{
+	size_t a = 0, b = 0;
+	char v[16] = {0};
+	pathtrace_uid = -1;
+	if (tawc_str_append(pathtrace_uid_path, sizeof pathtrace_uid_path, &a, tawcroot_store_host_path) ||
+	    tawc_str_append(pathtrace_uid_path, sizeof pathtrace_uid_path, &a, "/trace_uid") ||
+	    tawc_str_append(pathtrace_log_path, sizeof pathtrace_log_path, &b, tawcroot_store_host_path) ||
+	    tawc_str_append(pathtrace_log_path, sizeof pathtrace_log_path, &b, "/trace.log"))
+		return;
+	long fd = tawc_openat(AT_FDCWD, pathtrace_uid_path, O_RDONLY | O_CLOEXEC, 0);
+	if (fd < 0) return;
+	long n = tawc_read((int)fd, v, sizeof v - 1);
+	tawc_close((int)fd);
+	long u = 0;
+	for (long i = 0; i < n && v[i] >= '0' && v[i] <= '9'; i++) u = u * 10 + (v[i] - '0');
+	if (n > 0) pathtrace_uid = u % 100000;
+}
+
+static int pathtrace_wanted(void)
+{
+	long uid = (long)(tawcroot_identity_euid() % 100000);
+	if (uid < 10000 || !tawcroot_store_host_path_len) return 0;
+	if (pathtrace_uid == -2) pathtrace_init();
+	return pathtrace_uid == uid;
+}
+
+/* Which argument holds the path, or -1 */
+static int pathtrace_arg(long nr)
+{
+	switch (nr) {
+	case TAWC_SYS_openat: case TAWC_SYS_faccessat: case TAWC_SYS_faccessat2:
+	case TAWC_SYS_fstatat: case TAWC_SYS_readlinkat: case TAWC_SYS_statx:
+	case TAWC_SYS_execveat: case TAWC_SYS_inotify_add_watch:
+		return 1;
+	case TAWC_SYS_execve: case TAWC_SYS_statfs:
+		return 0;
+	default:
+		return -1;
+	}
+}
+
+static __attribute__((noinline)) void pathtrace_emit(const tawcroot_syscall_args *args, long rv)
+{
+	char line[640];
+	size_t li = 0;
+	int which = pathtrace_arg(args->nr);
+	if (which < 0 && args->nr != TAWC_SYS_connect) return;
+	(void)tawc_str_append_dec(line, sizeof line, &li, TAWC_RAW(TAWC_SYS_getpid, 0, 0, 0, 0, 0, 0));
+	(void)tawc_str_append(line, sizeof line, &li, " ");
+	(void)tawc_str_append_dec(line, sizeof line, &li, args->nr);
+	(void)tawc_str_append(line, sizeof line, &li, " ");
+	(void)tawc_str_append_dec(line, sizeof line, &li, rv);
+	(void)tawc_str_append(line, sizeof line, &li, " ");
+	if (which >= 0) {
+		const char *src = (const char *)(which ? args->b : args->a);
+		size_t room = sizeof line - li - 2;
+		if (tawc_copy_string_from_guest(line + li, room, src) < 0) line[li] = 0;
+		line[li + room - 1] = 0;
+		while (line[li]) li++;
+		if (args->nr == TAWC_SYS_execve) {
+			const long *argv = (const long *)args->b;
+			for (int i = 1; i < 6 && li < sizeof line - 40; i++) {
+				long ap = 0;
+				if (tawc_copy_from_guest(&ap, sizeof ap, argv + i) < 0 || !ap) break;
+				line[li++] = ' ';
+				room = sizeof line - li - 2;
+				if (tawc_copy_string_from_guest(line + li, room, (const char *)ap) < 0) line[li] = 0;
+				line[li + room - 1] = 0;
+				while (line[li]) li++;
+			}
+		}
+	} else {
+		/* connect: family, then port (inet) or path (unix) */
+		unsigned char sa[112] = {0};
+		long len = args->c < (long)sizeof sa ? args->c : (long)sizeof sa;
+		if (len > 0 && tawc_copy_from_guest(sa, (size_t)len, (const void *)args->b) >= 0) {
+			unsigned fam = sa[0] | (sa[1] << 8);
+			(void)tawc_str_append(line, sizeof line, &li, "connect fam=");
+			(void)tawc_str_append_dec(line, sizeof line, &li, fam);
+			if (fam == 2 || fam == 10) {
+				(void)tawc_str_append(line, sizeof line, &li, " port=");
+				(void)tawc_str_append_dec(line, sizeof line, &li, (sa[2] << 8) | sa[3]);
+			} else if (fam == 1) {
+				sa[sizeof sa - 1] = 0;
+				(void)tawc_str_append(line, sizeof line, &li, " ");
+				(void)tawc_str_append(line, sizeof line, &li, sa[2] ? (char *)sa + 2 : "@");
+				if (!sa[2]) (void)tawc_str_append(line, sizeof line, &li, (char *)sa + 3);
+			}
+		}
+	}
+	(void)tawc_str_append(line, sizeof line, &li, "\n");
+	long fd = tawc_openat(AT_FDCWD, pathtrace_log_path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0666);
+	if (fd < 0) return;
+	(void)tawc_write((int)fd, line, li);
+	tawc_close((int)fd);
+}
+#endif
+
 static void sigsys_handler(int sig, siginfo_t *info, void *ucontext)
 {
 	(void)sig;
@@ -183,7 +296,15 @@ static void sigsys_handler(int sig, siginfo_t *info, void *ucontext)
 	uint64_t stats_t0 = tawcroot_stats_now();
 	uint64_t stats_i0 = tawcroot_stats_inner_seen();
 	long rv = tawcroot_fs_sync();
+#ifdef TAWCROOT_PATHTRACE
+	const int traced = pathtrace_wanted();
+	/* A successful exec never returns here */
+	if (traced && (args.nr == TAWC_SYS_execve || args.nr == TAWC_SYS_execveat)) pathtrace_emit(&args, 0);
+#endif
 	if (!rv) rv = tawcroot_dispatch_call(&args, uc);
+#ifdef TAWCROOT_PATHTRACE
+	if (traced && args.nr != TAWC_SYS_execve && args.nr != TAWC_SYS_execveat) pathtrace_emit(&args, rv);
+#endif
 	tawcroot_stats_trap(args.nr, tawcroot_stats_now() - stats_t0,
 			    tawcroot_stats_inner_seen() - stats_i0);
 #ifdef TAWCROOT_TRACE
