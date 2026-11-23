@@ -140,7 +140,21 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         "\n"
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
-        "    write /run/user/1000/boot_completed 1\n";
+        "    write /run/user/1000/boot_completed 1\n"
+        // Network validation probes Google by default, unreachable from
+        // where many phones are: eth0 stays PARTIAL_CONNECTIVITY, never
+        // VALIDATED, and DownloadManager's jobs (which need a validated
+        // network) wait forever. Probe vendor generate_204 endpoints that
+        // answer from China. Settings persist; the first boot re-probes
+        // with them on NetworkMonitor's next retry.
+        "    exec_background - system system -- /system/bin/cmd settings put global captive_portal_https_url "
+        "https://connect.rom.miui.com/generate_204\n"
+        "    exec_background - system system -- /system/bin/cmd settings put global captive_portal_http_url "
+        "http://connectivitycheck.platform.hicloud.com/generate_204\n"
+        "    exec_background - system system -- /system/bin/cmd settings put global captive_portal_fallback_url "
+        "http://wifi.vivo.com.cn/generate_204\n"
+        "    exec_background - system system -- /system/bin/cmd settings put global captive_portal_other_fallback_urls "
+        "http://conn1.oppomobile.com/generate_204\n";
     if (own_audio_hal) {
         // The image's audio HAL service is 32-bit only; its 64-bit
         // implementations are served by our passthrough service

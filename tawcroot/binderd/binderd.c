@@ -31,6 +31,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <linux/android/binder.h>
@@ -118,6 +119,8 @@ struct work {
 	struct list entry;
 	int type;
 	uint32_t cmd;           /* W_ERROR */
+	uint64_t at_ms;         /* queued, for the stall watchdog */
+	bool warned;
 };
 
 struct ctx;
@@ -226,6 +229,9 @@ struct buffer {
 	struct node *target_node;
 	bool async;
 	bool delivered;             /* user may BC_FREE_BUFFER it */
+	uint64_t delivered_ms;      /* when, and to which thread: the watchdog's evidence */
+	int delivered_tid;
+	bool warned;
 };
 
 struct txn {
@@ -279,14 +285,25 @@ static bool has_work(const struct thread *t)
 	       (wait_for_proc_work(t) && !list_empty(&t->proc->todo));
 }
 
+static uint64_t now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
 static void enqueue_thread(struct thread *t, struct work *w, bool deferred)
 {
+	w->at_ms = now_ms();
+	w->warned = false;
 	list_add_tail(&t->todo, &w->entry);
 	if (!deferred) t->process_todo = true;
 }
 
 static void enqueue_proc(struct proc *p, struct work *w)
 {
+	w->at_ms = now_ms();
+	w->warned = false;
 	list_add_tail(&p->todo, &w->entry);
 }
 
@@ -945,6 +962,7 @@ static void handle_transaction(struct thread *th, const struct binder_transactio
 	} else {
 		enqueue_thread(th, tc, false);
 		if (target_node->has_async) {
+			t->work.at_ms = now_ms();
 			list_add_tail(&target_node->async_todo, &t->work.entry);
 		} else {
 			target_node->has_async = true;
@@ -1035,6 +1053,19 @@ static void dead_binder_done(struct thread *th, uint64_t cookie)
 	}
 }
 
+/* The node's oneway slot is free: its next queued oneway call goes to the
+ * process, as the kernel does on BC_FREE_BUFFER of an async buffer. */
+static void async_next(struct node *n)
+{
+	struct list *w = list_pop(&n->async_todo);
+	if (!w) {
+		n->has_async = false;
+	} else if (n->proc) {
+		enqueue_proc(n->proc, container_of(w, struct work, entry));
+		wake_proc(n->proc);
+	}
+}
+
 static void free_buffer_cmd(struct thread *th, uint64_t addr)
 {
 	struct proc *p = th->proc;
@@ -1047,16 +1078,7 @@ static void free_buffer_cmd(struct thread *th, uint64_t addr)
 		b->txn->buf = NULL;
 		b->txn = NULL;
 	}
-	if (b->async && b->target_node) {
-		struct node *n = b->target_node;
-		struct list *w = list_pop(&n->async_todo);
-		if (!w) {
-			n->has_async = false;
-		} else if (n->proc) {
-			list_add_tail(&n->proc->todo, w);
-			wake_proc(n->proc);
-		}
-	}
+	if (b->async && b->target_node) async_next(b->target_node);
 	release_buffer(p, b, (size_t)-1);
 	free_buffer(p, b);
 }
@@ -1249,6 +1271,8 @@ static bool put_txn(struct out *o, struct thread *th, struct txn *t)
 		tr->data.ptr.buffer = p->map_base + b->off;
 		tr->data.ptr.offsets = p->map_base + b->off + BW_ALIGN8(b->data_size);
 		b->delivered = true;
+		b->delivered_ms = now_ms();
+		b->delivered_tid = th->tid;
 	}
 	if (t->secctx) td.secctx = p->map_base + t->secctx_off;
 	put(o, t->is_reply ? BR_REPLY : (t->secctx ? BR_TRANSACTION_SEC_CTX : BR_TRANSACTION), &td, len);
@@ -1890,14 +1914,51 @@ static size_t list_len(const struct list *l)
 	return n;
 }
 
+static uint64_t age_s(uint64_t at_ms, uint64_t now)
+{
+	return at_ms && now > at_ms ? (now - at_ms) / 1000 : 0;
+}
+
+/* The process's oneway buffer for node n still allocated (in flight or
+ * delivered and not yet BC_FREE_BUFFERed), or NULL. */
+static struct buffer *async_buffer_of(struct proc *p, struct node *n)
+{
+	for (struct list *e = p->buffers.next; e != &p->buffers; e = e->next) {
+		struct buffer *b = container_of(e, struct buffer, entry);
+		if (b->async && b->target_node == n) return b;
+	}
+	return NULL;
+}
+
+static struct thread *thread_of(struct proc *p, int tid)
+{
+	for (struct list *e = p->threads.next; e != &p->threads; e = e->next) {
+		struct thread *th = container_of(e, struct thread, entry);
+		if (th->tid == tid) return th;
+	}
+	return NULL;
+}
+
 /* SIGUSR1: every live process, its threads and their transaction
  * stacks, for diagnosing a hung guest. */
 static void dump_state(void)
 {
+	uint64_t now = now_ms();
 	for (struct list *e = g_procs.next; e != &g_procs; e = e->next) {
 		struct proc *p = container_of(e, struct proc, entry);
-		LOG("%s pid %d (host %d)%s todo %zu threads %zu", p->ctx->name, p->guest_pid,
-		    p->host_pid, p->dead ? " dead" : "", list_len(&p->todo), list_len(&p->threads));
+		uint64_t oldest = list_empty(&p->todo) ? 0 : container_of(p->todo.next, struct work, entry)->at_ms;
+		LOG("%s pid %d (host %d)%s todo %zu (oldest %llus) threads %zu requested %u/%u max %u", p->ctx->name,
+		    p->guest_pid, p->host_pid, p->dead ? " dead" : "", list_len(&p->todo),
+		    (unsigned long long)age_s(oldest, now), list_len(&p->threads), p->requested_threads,
+		    p->requested_threads_started, p->max_threads);
+		for (struct list *ne = p->nodes.next; ne != &p->nodes; ne = ne->next) {
+			struct node *n = container_of(ne, struct node, entry);
+			if (!n->has_async && list_empty(&n->async_todo)) continue;
+			struct buffer *b = async_buffer_of(p, n);
+			LOG("  node %u oneway: busy %d queued %zu, in flight: %s%llus to tid %d", n->id, n->has_async,
+			    list_len(&n->async_todo), !b ? "none " : b->delivered ? "delivered " : "undelivered ",
+			    (unsigned long long)(b ? age_s(b->delivered_ms, now) : 0), b ? b->delivered_tid : 0);
+		}
 		for (struct list *t = p->threads.next; t != &p->threads; t = t->next) {
 			struct thread *th = container_of(t, struct thread, entry);
 			LOG("  tid %d looper %#x%s todo %zu", th->tid, th->looper,
@@ -1907,6 +1968,73 @@ static void dump_state(void)
 				    x->from ? x->from->tid : 0, x->to_thread ? x->to_thread->tid : 0,
 				    x->to_proc ? x->to_proc->guest_pid : 0, x->is_reply ? " reply" : "");
 		}
+	}
+}
+
+/* Every few seconds: catch a node whose oneway queue cannot move and work
+ * no thread picks up, log the evidence with a full dump, and free a oneway
+ * slot that is provably stuck. A stuck slot starves every later oneway call
+ * to that node, e.g. all of an app's IApplicationThread calls (service
+ * create/bind never arrive and the app ANRs while idle). */
+#define WATCHDOG_MS 5000
+#define STALL_TODO_MS 10000
+#define STALL_ASYNC_MS 30000
+
+static void check_stalls(void)
+{
+	static uint64_t last_dump;
+	uint64_t now = now_ms();
+	bool dump = false;
+	for (struct list *e = g_procs.next; e != &g_procs; e = e->next) {
+		struct proc *p = container_of(e, struct proc, entry);
+		if (p->dead) continue;
+		if (!list_empty(&p->todo)) {
+			struct work *w = container_of(p->todo.next, struct work, entry);
+			if (w->at_ms && now - w->at_ms > STALL_TODO_MS && !w->warned) {
+				w->warned = true;
+				LOG("stall: %s pid %d: work waiting %llus, no thread took it", p->ctx->name, p->guest_pid,
+				    (unsigned long long)age_s(w->at_ms, now));
+				dump = true;
+			}
+		}
+		for (struct list *ne = p->nodes.next; ne != &p->nodes; ne = ne->next) {
+			struct node *n = container_of(ne, struct node, entry);
+			if (!n->has_async) continue;
+			struct buffer *b = async_buffer_of(p, n);
+			if (!b) {
+				/* Busy with no oneway buffer: nothing will ever BC_FREE_BUFFER it */
+				LOG("stall: %s pid %d node %u: oneway slot held by nothing, releasing %zu queued",
+				    p->ctx->name, p->guest_pid, n->id, list_len(&n->async_todo));
+				async_next(n);
+				dump = true;
+				continue;
+			}
+			if (!b->delivered || now - b->delivered_ms < STALL_ASYNC_MS || b->warned) continue;
+			b->warned = true;
+			struct thread *th = thread_of(p, b->delivered_tid);
+			bool idle = th && th->waiting && wait_for_proc_work(th);
+			LOG("stall: %s pid %d node %u: oneway call delivered %llus ago to tid %d (%s), not freed, %zu queued",
+			    p->ctx->name, p->guest_pid, n->id, (unsigned long long)age_s(b->delivered_ms, now),
+			    b->delivered_tid, !th ? "gone" : idle ? "idle" : "busy", list_len(&n->async_todo));
+			/* That thread already went back for more work (or is gone), so
+			 * its BC_FREE_BUFFER was lost: let the queue move. The buffer
+			 * stays until freed or the process dies. */
+			dump = true;
+			if (!th || idle) {
+				/* Detach the buffer from the node (dropping the node ref it
+				 * held) so its eventual free does not advance the queue twice */
+				b->target_node = NULL;
+				async_next(n);
+				n->tmp_refs--;
+				/* May free the node: the rest of this list waits for the next tick */
+				(void)dec_node(n, false, true);
+				break;
+			}
+		}
+	}
+	if (dump && now - last_dump > 60000) {
+		last_dump = now;
+		dump_state();
 	}
 }
 
@@ -1937,6 +2065,11 @@ int main(int argc, char **argv)
 	sigaction(SIGINT, &sa, NULL);
 	struct sigaction da = { .sa_handler = on_dump };
 	sigaction(SIGUSR1, &da, NULL);
+	/* Started from the app, whose runtime blocks SIGQUIT and SIGUSR1 in
+	 * every thread: the dump signal would stay pending forever. */
+	sigset_t none;
+	sigemptyset(&none);
+	sigprocmask(SIG_SETMASK, &none, NULL);
 
 	list_init(&g_procs);
 	list_init(&g_dead_nodes);
@@ -1960,12 +2093,17 @@ int main(int argc, char **argv)
 	FILE *rf = fopen(ready, "w");
 	if (rf) fclose(rf);
 
+	uint64_t next_check = now_ms() + WATCHDOG_MS;
 	while (!g_stop) {
 		/* One at a time: a handler may free connections a later
 		 * event in the same batch would name. */
 		struct epoll_event ev[1];
-		int n = epoll_wait(g_epoll, ev, 1, -1);
+		int n = epoll_wait(g_epoll, ev, 1, WATCHDOG_MS);
 		if (g_dump) { g_dump = 0; dump_state(); }
+		if (now_ms() >= next_check) {
+			next_check = now_ms() + WATCHDOG_MS;
+			check_stalls();
+		}
 		if (n < 0) {
 			if (errno == EINTR) continue;
 			LOG("epoll_wait: %s", strerror(errno));

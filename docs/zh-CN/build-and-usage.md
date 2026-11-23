@@ -33,16 +33,18 @@ security find-certificate -a -c "Zscaler Root CA" -p /Library/Keychains/System.k
 启动容器（在仓库根目录执行）：
 
 ```sh
-docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -e JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts -Djavax.net.ssl.trustStorePassword=changeit" -e ANDROID_HOME=/root/Android/Sdk -v ~/docker-certs:/certificates:ro -v wayondroid-sdk:/root/Android -v wayondroid-gradle:/root/.gradle -v "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash
+docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -e JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts -Djavax.net.ssl.trustStorePassword=changeit" -e ANDROID_HOME=/root/Android/Sdk -v ~/docker-certs:/certificates:ro -v wayondroid-sdk:/root/Android -v wayondroid-gradle:/root/.gradle -v wayondroid-android-home:/root/.android -v "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash
 
                                                    
-docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -e JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts -Djavax.net.ssl.trustStorePassword=changeit" -e    ANDROID_HOME=/root/Android/Sdk -v ~/docker-certs:/certificates:ro -v wayondroid-sdk:/root/Android -v wayondroid-gradle:/root/.gradle -v wayondroid-cargo:/root/.cargo -v wayondroid-rustup:/root/.rustup -v      "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash                        
+docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -e JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts -Djavax.net.ssl.trustStorePassword=changeit" -e    ANDROID_HOME=/root/Android/Sdk -v ~/docker-certs:/certificates:ro -v wayondroid-sdk:/root/Android -v wayondroid-gradle:/root/.gradle -v wayondroid-android-home:/root/.android -v wayondroid-cargo:/root/.cargo -v wayondroid-rustup:/root/.rustup -v      "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash                        
 ```
 
 - `USE_SYSTEM_CA_CERTS=1`：temurin 镜像启动时把 `/certificates/*.crt` 加进系统证书库和 JDK 17 的 cacerts。
 - `JAVA_TOOL_OPTIONS`：`gradle/gradle-daemon-jvm.properties` 要求守护进程跑在 JDK 25 上，Gradle
   会自己下载一个，它的证书库里没有代理证书；这个变量让所有 JVM 改用 JDK 17 那份已导入证书的 cacerts。
 - `wayondroid-sdk`、`wayondroid-gradle` 两个 volume 保存 SDK 和 Gradle 缓存，`--rm` 删掉容器后不用重新下载。
+- `wayondroid-android-home` 保存 debug 签名密钥（`/root/.android/debug.keystore`）。不挂的话每个新容器都生成新密钥，
+  编出的包签名变了，手机上无法覆盖安装（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），只能卸载重装、丢掉实例。
 - 命令要写成一行，或确认每行末尾的 `\` 后面没有空格，否则会报 `invalid reference format`。
 
 ### 依赖
