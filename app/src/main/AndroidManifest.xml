@@ -63,6 +63,12 @@
                 android:value="Virtual Machine runtime service for Wayondroid guest instances" />
         </service>
 
+        <!-- Guest media sessions for allowed apps on the phone; the caller check is in the provider -->
+        <provider
+            android:name=".domain.guest.GuestControlProvider"
+            android:authorities="${applicationId}.guest"
+            android:exported="true" />
+
         <!-- Required by the Shizuku API for the binder-transfer handshake, harmless if Shizuku/Sui is never installed -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

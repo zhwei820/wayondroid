@@ -170,6 +170,17 @@ class VineVMManager @Inject constructor(
 
     fun isActive(instanceId: String): Boolean = flowFor(instanceId).value in ACTIVE
 
+    fun runningInstanceIds(): List<String> = statusFlows.filterValues { it.value == VMStatus.RUNNING }.keys.toList()
+
+    // Runs a guest program as root, argv as given (no shell); its output, or why it could not run or exited non-zero
+    suspend fun guestExec(instanceId: String, timeoutMs: Int, vararg argv: String): Result<String> {
+        val reply = helperFor(instanceId).request("exec", instanceId, timeoutMs.toString(), *argv, timeoutMs = timeoutMs + 5_000L)
+        if (!reply.ok) return Result.failure(IOException(reply.payload))
+        val code = reply.payload.substringBefore('\n').removePrefix("exit=").toIntOrNull()
+        val output = reply.payload.substringAfter('\n', "")
+        return if (code == 0) Result.success(output) else Result.failure(IOException("exit=$code: ${output.take(200)}"))
+    }
+
     fun vinefbPath(instance: VMInstance): String = File(instance.storagePath, "shared/vinefb").path
 
     // Tries to get root for the helper, which may show the superuser prompt. Returns the failure text or null on success.
