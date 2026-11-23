@@ -236,3 +236,100 @@ long tawcroot_proc_maps_rewrite(
 	}
 	return (long)out_off;
 }
+
+/* Arm Ltd. cores that implement SVE. LLVM picks its target from the
+ * `CPU part` line and enables SVE by core name; it does not check
+ * HWCAP_SVE. */
+static int arm_part_has_sve(unsigned long part)
+{
+	static const unsigned short parts[] = {
+		0xd40, /* Neoverse V1 */
+		0xd46, /* Cortex-A510 */
+		0xd47, /* Cortex-A710 */
+		0xd48, /* Cortex-X2 */
+		0xd49, /* Neoverse N2 */
+		0xd4d, /* Cortex-A715 */
+		0xd4e, /* Cortex-X3 */
+		0xd4f, /* Neoverse V2 */
+		0xd80, /* Cortex-A520 */
+		0xd81, /* Cortex-A720 */
+		0xd82, /* Cortex-X4 */
+		0xd84, /* Neoverse V3 */
+		0xd85, /* Cortex-X925 */
+		0xd87, /* Cortex-A725 */
+		0xd8e, /* Neoverse N3 */
+	};
+	for (size_t k = 0; k < sizeof parts / sizeof parts[0]; k++)
+		if (parts[k] == part) return 1;
+	return 0;
+}
+
+/* Parse "<key><spaces/tabs>: 0x<hex>" at the start of `line`. Returns
+ * the value, or -1 if the line is not that key. `*val_start` and
+ * `*val_end` bracket the "0x<hex>" token. */
+static long cpuinfo_hex_field(const char *line, size_t len, const char *key,
+			      size_t *val_start, size_t *val_end)
+{
+	size_t i = 0;
+	while (key[i]) {
+		if (i >= len || line[i] != key[i]) return -1;
+		i++;
+	}
+	while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+	if (i >= len || line[i] != ':') return -1;
+	i++;
+	while (i < len && line[i] == ' ') i++;
+	if (i + 2 > len || line[i] != '0' || (line[i + 1] != 'x' && line[i + 1] != 'X'))
+		return -1;
+	*val_start = i;
+	i += 2;
+	unsigned long v = 0;
+	size_t digits = 0;
+	for (; i < len; i++, digits++) {
+		char c = line[i];
+		int d;
+		if (c >= '0' && c <= '9') d = c - '0';
+		else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+		else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+		else break;
+		v = v * 16 + (unsigned long)d;
+	}
+	if (digits == 0 || digits > 8) return -1;
+	*val_end = i;
+	return (long)v;
+}
+
+long tawcroot_cpuinfo_hide_sve_cores(const char *in, size_t in_len,
+				     char *out, size_t out_cap)
+{
+	if (!in || !out) return TAWC_ENOSPC;
+	size_t out_off = 0;
+	long implementer = -1;
+	size_t i = 0;
+	while (i < in_len) {
+		size_t end = i;
+		while (end < in_len && in[end] != '\n') end++;
+		const char *line = in + i;
+		size_t len = end - i;
+		size_t vs, ve;
+		long v = cpuinfo_hex_field(line, len, "CPU implementer", &vs, &ve);
+		if (v >= 0) implementer = v;
+		long part = implementer == 0x41
+			? cpuinfo_hex_field(line, len, "CPU part", &vs, &ve) : -1;
+		long e;
+		if (part >= 0 && arm_part_has_sve((unsigned long)part)) {
+			e = out_write(out, out_cap, &out_off, line, vs);
+			if (!e) e = out_write(out, out_cap, &out_off,
+					      TAWCROOT_CPUINFO_NO_SVE_PART,
+					      sizeof TAWCROOT_CPUINFO_NO_SVE_PART - 1);
+			if (!e) e = out_write(out, out_cap, &out_off,
+					      line + ve, len - ve);
+		} else {
+			e = out_write(out, out_cap, &out_off, line, len);
+		}
+		if (!e && end < in_len) e = out_write(out, out_cap, &out_off, "\n", 1);
+		if (e < 0) return e;
+		i = end + 1;
+	}
+	return (long)out_off;
+}

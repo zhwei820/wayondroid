@@ -421,3 +421,87 @@ test(maps_output_too_small_returns_nospc)
 					    small, sizeof small);
 	test_int_eq(n, -28);  /* -ENOSPC */
 }
+
+/* --- /proc/cpuinfo: hide SVE cores ------------------------------- */
+
+static long hide_sve(const char *in, char *out, size_t cap)
+{
+	long n = tawcroot_cpuinfo_hide_sve_cores(in, strlen(in), out, cap);
+	if (n >= 0 && (size_t)n < cap) out[n] = 0;
+	return n;
+}
+
+/* Snapdragon 8+ Gen 1 (SM8475): A510 / A710 / X2 with SVE off. */
+test(cpuinfo_sve_parts_become_a78)
+{
+	const char in[] =
+		"processor\t: 0\n"
+		"Features\t: fp asimd atomics\n"
+		"CPU implementer\t: 0x41\n"
+		"CPU architecture: 8\n"
+		"CPU part\t: 0xd46\n"
+		"CPU revision\t: 1\n"
+		"\n"
+		"processor\t: 7\n"
+		"CPU implementer\t: 0x41\n"
+		"CPU part\t: 0xd48\n"
+		"CPU revision\t: 0\n";
+	const char want[] =
+		"processor\t: 0\n"
+		"Features\t: fp asimd atomics\n"
+		"CPU implementer\t: 0x41\n"
+		"CPU architecture: 8\n"
+		"CPU part\t: 0xd41\n"
+		"CPU revision\t: 1\n"
+		"\n"
+		"processor\t: 7\n"
+		"CPU implementer\t: 0x41\n"
+		"CPU part\t: 0xd41\n"
+		"CPU revision\t: 0\n";
+	char out[512];
+	test_int_eq(hide_sve(in, out, sizeof out), (long)strlen(want));
+	test_str_eq(out, want);
+}
+
+/* Cores without SVE keep their part: a Cortex-A55 must not be promoted
+ * to an A78, whose v8.2 extras it may lack. */
+test(cpuinfo_non_sve_parts_pass_through)
+{
+	const char in[] =
+		"CPU implementer\t: 0x41\n"
+		"CPU part\t: 0xd05\n"
+		"CPU implementer\t: 0x41\n"
+		"CPU part\t: 0xd41\n";
+	char out[256];
+	test_int_eq(hide_sve(in, out, sizeof out), (long)strlen(in));
+	test_str_eq(out, in);
+}
+
+/* Part numbers are per implementer: 0xd46 from another vendor is not an
+ * Arm Cortex-A510. */
+test(cpuinfo_other_implementer_passes_through)
+{
+	const char in[] =
+		"CPU implementer\t: 0x51\n"
+		"CPU part\t: 0xd46\n";
+	char out[128];
+	test_int_eq(hide_sve(in, out, sizeof out), (long)strlen(in));
+	test_str_eq(out, in);
+}
+
+test(cpuinfo_no_trailing_newline)
+{
+	const char in[] = "CPU implementer\t: 0x41\nCPU part\t: 0xd47";
+	const char want[] = "CPU implementer\t: 0x41\nCPU part\t: 0xd41";
+	char out[128];
+	test_int_eq(hide_sve(in, out, sizeof out), (long)strlen(want));
+	test_str_eq(out, want);
+}
+
+test(cpuinfo_output_too_small)
+{
+	const char in[] = "CPU implementer\t: 0x41\nCPU part\t: 0xd48\n";
+	char out[8];
+	test_int_eq(tawcroot_cpuinfo_hide_sve_cores(in, strlen(in), out, sizeof out),
+		    -28L);  /* -ENOSPC */
+}

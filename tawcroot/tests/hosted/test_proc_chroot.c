@@ -130,6 +130,7 @@ static const struct { const char *path; int kind; } shadow_paths[] = {
 	{ "/proc/self/net/tcp6",             TAWCROOT_PROC_SHADOW_TCP6 },
 	{ "/sys/fs/selinux/status",          TAWCROOT_PROC_SHADOW_SELINUX_STATUS },
 	{ "/sys/fs/selinux/enforce",         TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE },
+	{ "/proc/cpuinfo",                   TAWCROOT_PROC_SHADOW_CPUINFO },
 };
 #define N_SHADOW_PATHS ((int)(sizeof shadow_paths / sizeof shadow_paths[0]))
 

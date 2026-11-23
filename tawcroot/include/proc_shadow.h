@@ -44,7 +44,8 @@ struct statx;
 #define TAWCROOT_PROC_SHADOW_TCP6       10
 #define TAWCROOT_PROC_SHADOW_SELINUX_STATUS  11  /* /sys/fs/selinux/status */
 #define TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE 12  /* /sys/fs/selinux/enforce */
-#define TAWCROOT_PROC_SHADOW_KIND_MAX   12
+#define TAWCROOT_PROC_SHADOW_CPUINFO    13  /* /proc/cpuinfo */
+#define TAWCROOT_PROC_SHADOW_KIND_MAX   13
 int tawcroot_proc_shadow_classify(const char *path);
 
 /* Synthesize the shadow fd for a classified kind. Returns the new fd or

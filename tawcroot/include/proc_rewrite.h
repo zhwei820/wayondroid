@@ -67,3 +67,19 @@ long tawcroot_proc_maps_rewrite(
 	const tawcroot_proc_rewrite_ctx *ctx,
 	const char *in, size_t in_len,
 	char *out, size_t out_cap);
+
+/* `CPU part` reported for cores that hide SVE: Cortex-A78, the newest Arm
+ * core without SVE, so LLVM keeps the v8.2 features these cores do have. */
+#define TAWCROOT_CPUINFO_NO_SVE_PART "0xd41"
+
+/* Rewrite a `/proc/cpuinfo` buffer for a kernel that does not expose SVE
+ * (no HWCAP_SVE) on cores that implement it, as on the Snapdragon 8 Gen 1
+ * family. LLVM's JIT (Mesa's llvmpipe/lavapipe) chooses its target from
+ * the `CPU part` line and would emit SVE, which then traps with SIGILL.
+ * Every Arm Ltd. (implementer 0x41) part known to implement SVE becomes
+ * TAWCROOT_CPUINFO_NO_SVE_PART; all other lines pass through.
+ *
+ * Returns the number of bytes written to `out`, or -ENOSPC. The output
+ * is not NUL-terminated. */
+long tawcroot_cpuinfo_hide_sve_cores(const char *in, size_t in_len,
+				     char *out, size_t out_cap);

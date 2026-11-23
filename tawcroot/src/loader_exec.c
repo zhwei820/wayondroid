@@ -57,6 +57,7 @@ static size_t    g_host_page_size        = 4096;
 static uint64_t  g_guest_minsigstksz     = 32768;
 
 size_t tawcroot_loader_page_size(void) { return g_host_page_size; }
+uint64_t tawcroot_loader_host_hwcap(void) { return g_host_at_hwcap; }
 
 /* True iff `v` is a non-zero power of two. */
 static int is_pow2(uint64_t v)

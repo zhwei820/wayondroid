@@ -7,6 +7,7 @@
 
 #include "errno_neg.h"
 #include "io.h"
+#include "loader_exec.h"
 #include "loader_map.h"
 #include "path.h"
 #include "proc_rewrite.h"
@@ -28,7 +29,7 @@ int tawcroot_could_be_proc_relative(const char *p)
 {
 	static const char *const leaves[] = {
 		"maps", "stat", "version", "uptime", "loadavg", "devices",
-		"tcp", "tcp6", "overflowuid", "overflowgid",
+		"tcp", "tcp6", "overflowuid", "overflowgid", "cpuinfo",
 		"exe", "cwd", "root",
 	};
 	const char *leaf = p;
@@ -394,6 +395,8 @@ int tawcroot_proc_shadow_classify(const char *path)
 		return TAWCROOT_PROC_SHADOW_UPTIME;
 	if (tawc_streq(path, "/proc/loadavg"))
 		return TAWCROOT_PROC_SHADOW_LOADAVG;
+	if (tawc_streq(path, "/proc/cpuinfo"))
+		return TAWCROOT_PROC_SHADOW_CPUINFO;
 	/* Last: the only kind whose match can cost a /proc/<n>/status
 	 * read (numeric-pid ownership resolution). */
 	if (is_proc_self_maps(path))
@@ -700,6 +703,53 @@ static long open_proc_loadavg_shadow(void)
 	return memfd_from_bytes("tawcroot-loadavg", buf, pos);
 }
 
+/* /proc/cpuinfo shadow fd: the kernel's file, with SVE cores renamed when
+ * the kernel keeps SVE off (see tawcroot_cpuinfo_hide_sve_cores). Elsewhere
+ * the bytes pass through unchanged. */
+#define AARCH64_HWCAP_SVE (1UL << 22)
+
+static int cpuinfo_hides_sve(void)
+{
+#if defined(__aarch64__)
+	uint64_t hwcap = tawcroot_loader_host_hwcap();
+	return hwcap != 0 && !(hwcap & AARCH64_HWCAP_SVE);
+#else
+	return 0;
+#endif
+}
+
+static long open_proc_cpuinfo_shadow(void)
+{
+	long src = tawc_openat(AT_FDCWD, "/proc/cpuinfo", O_RDONLY | O_CLOEXEC, 0);
+	if (src < 0) return src;
+	long in_region;
+	size_t in_cap;
+	long in_len = read_all_growable((int)src, &in_region, &in_cap);
+	tawc_close((int)src);
+	if (in_len < 0) return in_len;
+	const char *in_buf = (const char *)(uintptr_t)in_region;
+	if (!cpuinfo_hides_sve()) {
+		long memfd = memfd_from_bytes("tawcroot-cpuinfo", in_buf, (size_t)in_len);
+		(void)tawc_munmap((void *)(uintptr_t)in_region, in_cap);
+		return memfd;
+	}
+	/* The replacement part is no longer than any part it replaces. */
+	size_t out_cap = (size_t)in_len + 1;
+	long out_region = maps_mmap(out_cap);
+	if (out_region < 0) {
+		(void)tawc_munmap((void *)(uintptr_t)in_region, in_cap);
+		return out_region;
+	}
+	long out_len = tawcroot_cpuinfo_hide_sve_cores(
+		in_buf, (size_t)in_len, (char *)(uintptr_t)out_region, out_cap);
+	(void)tawc_munmap((void *)(uintptr_t)in_region, in_cap);
+	long memfd = out_len < 0 ? out_len
+		: memfd_from_bytes("tawcroot-cpuinfo",
+				   (const char *)(uintptr_t)out_region, (size_t)out_len);
+	(void)tawc_munmap((void *)(uintptr_t)out_region, out_cap);
+	return memfd;
+}
+
 /* selinuxfs status page (struct selinux_status_t): version 1, sequence
  * 0 (no update in progress), permissive, policy load 0, deny_unknown 0.
  * A whole page, because libselinux maps one. */
@@ -741,6 +791,8 @@ long tawcroot_proc_shadow_open(int kind)
 		return open_selinux_status_shadow();
 	case TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE:
 		return memfd_from_bytes("tawcroot-selinux-enforce", "0", 1);
+	case TAWCROOT_PROC_SHADOW_CPUINFO:
+		return open_proc_cpuinfo_shadow();
 	default:
 		return TAWC_EINVAL;
 	}

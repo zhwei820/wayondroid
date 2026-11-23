@@ -20,7 +20,7 @@ for arg in "$@"; do
 done
 
 ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
-NDK_DIR="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)"
+NDK_DIR="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
 [ -d "$NDK_DIR" ] || { echo "ERROR: no NDK at $ANDROID_HOME/ndk/*" >&2; exit 1; }
 NDK_BIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
 # The guest is Android 13

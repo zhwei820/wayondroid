@@ -66,6 +66,8 @@ extern const struct tawc_loader_io tawcroot_loader_io_prod;
  * if we hardcode 4096. Passed as 0 (or a non-power-of-two) falls back
  * to 4096. */
 size_t tawcroot_loader_page_size(void);
+/* The kernel's AT_HWCAP as captured at startup; 0 if not captured. */
+uint64_t tawcroot_loader_host_hwcap(void);
 void tawcroot_loader_set_host_auxv(uint64_t hwcap, uint64_t hwcap2,
                                    uintptr_t sysinfo_ehdr,
                                    uint64_t clktck, uint64_t flags,
