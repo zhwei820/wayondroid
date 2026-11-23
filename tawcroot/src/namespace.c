@@ -364,7 +364,12 @@ long tawcroot_namespace_proc_open(const char *path, int flags)
     in[len] = 0;
     size_t m = status ? rewrite_status(in, out, TAWCROOT_PATH_SCRATCH_SIZE, pid)
                       : rewrite_stat(in, out, TAWCROOT_PATH_SCRATCH_SIZE, pid);
-    long copy = tawc_memfd_create("tawcroot-proc", (flags & O_CLOEXEC) ? 1 : 0);
+    /* The name carries the file, for readlink of the fd (memfd_link_target) */
+    char name[64] = "tawcroot-proc:";
+    size_t nn = 14;
+    (void)tawc_str_append_dec(name, sizeof name, &nn, pid);
+    (void)tawc_str_append(name, sizeof name, &nn, status ? "/status" : "/stat");
+    long copy = tawc_memfd_create(name, (flags & O_CLOEXEC) ? 1 : 0);
     if (copy < 0) return copy;
     if (tawc_write((int)copy, out, m) != (long)m) { tawc_close((int)copy); return TAWC_EIO; }
     (void)tawc_lseek((int)copy, 0, SEEK_SET);
@@ -725,6 +730,32 @@ int tawcroot_namespace_is_guest(long pid)
         pid = ppid;
     }
     return 0;
+}
+
+int tawcroot_namespace_pid_visible(long pid)
+{
+    if (!tawcroot_namespace_is_guest(pid)) return 0;
+    uint32_t me = tawcroot_identity_euid() % 100000;
+    if (me < 10000 || pid == tawc_getpid()) return 1;
+    char path[48] = "/proc/self/task/";
+    size_t n = 16;
+    if (!tawc_str_append_dec(path, sizeof path, &n, pid) &&
+        TAWC_RAW(TAWC_SYS_faccessat, AT_FDCWD, (long)path, 0, 0, 0, 0) == 0)
+        return 1;
+    uint32_t u, g;
+    (void)tawcroot_namespace_peer_ids(pid, &u, &g);
+    return u % 100000 == me;
+}
+
+long tawcroot_namespace_proc_path_hidden(const char *path)
+{
+    if (!tawcroot_namespace.init_pid || !tawc_starts_with(path, "/proc/")) return 0;
+    const char *c = path + 6;
+    long pid = 0;
+    for (; *c >= '0' && *c <= '9'; ++c) pid = pid * 10 + (*c - '0');
+    if (c == path + 6 || (*c && *c != '/')) return 0;
+    if (tawcroot_identity_euid() % 100000 < 10000) return 0;
+    return tawcroot_namespace_pid_visible(pid) ? 0 : TAWC_ENOENT;
 }
 
 /* A thread id of a guest process: a guest tgid, or one of init's

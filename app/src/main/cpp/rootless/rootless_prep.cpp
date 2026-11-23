@@ -294,14 +294,14 @@ std::string ethernet_ipconfig() {
     put_utf(out, "ipAssignment");
     put_utf(out, "STATIC");
     put_utf(out, "linkAddress");
-    put_utf(out, "10.0.2.15");
+    put_utf(out, "192.168.31.105");
     put_int(out, 24);
     put_utf(out, "gateway");
     put_int(out, 0); // default route
     put_int(out, 1);
-    put_utf(out, "10.0.2.2");
+    put_utf(out, "192.168.31.1");
     put_utf(out, "dns");
-    put_utf(out, "10.0.2.3");
+    put_utf(out, "192.168.31.1");
     put_utf(out, "proxySettings");
     put_utf(out, "NONE");
     put_utf(out, "id");
@@ -474,6 +474,10 @@ DeviceIdentity host_identity() {
     id.board = get("ro.product.board");
     id.incremental = get("ro.build.version.incremental");
     id.hardware = get("ro.hardware");
+    id.build_host = get("ro.build.host");
+    id.flavor = get("ro.build.flavor");
+    id.soc_manufacturer = get("ro.soc.manufacturer");
+    id.soc_model = get("ro.soc.model");
 #endif
     return id;
 }
@@ -548,9 +552,11 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
             else if (build == "tags") set = "release-keys";
             else if (build == "version.incremental") set = incremental.c_str();
             else if (build == "user") set = "android-build";
-            else if (build == "host") set = "localhost";
+            else if (build == "host") set = id.build_host.empty() ? "localhost" : id.build_host.c_str();
             else if (build == "product") set = id.device.c_str();
-            else if (build == "flavor") set = (made = id.name + "-user").c_str();
+            else if (build == "flavor") set = id.flavor.empty() ? (made = id.name + "-user").c_str() : id.flavor.c_str();
+            else if (key == "ro.soc.manufacturer" && !id.soc_manufacturer.empty()) set = id.soc_manufacturer.c_str();
+            else if (key == "ro.soc.model" && !id.soc_model.empty()) set = id.soc_model.c_str();
             else if (build == "fingerprint") {
                 // <brand>/<name>/<device>:<release>/<id>/<incremental>:<type>/<tags>
                 const size_t colon = value.find(':');
@@ -681,6 +687,14 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
             // Build.BOARD: Waydroid sets no ro.product.board at all
             if (!strcmp(f, "/system/build.prop") && !id.board.empty() && edited.find("\nro.product.board=") == std::string::npos)
                 edited += (edited.empty() || edited.back() == '\n' ? "" : "\n") + std::string("ro.product.board=") + id.board + "\n";
+            // A phone names its SoC; Waydroid sets neither
+            if (!strcmp(f, "/system/build.prop")) {
+                for (const auto& [k, v] : {std::pair<const char*, const std::string*>{"ro.soc.manufacturer", &id.soc_manufacturer},
+                                           {"ro.soc.model", &id.soc_model}}) {
+                    if (!v->empty() && edited.find(std::string("\n") + k + "=") == std::string::npos)
+                        edited += (edited.empty() || edited.back() == '\n' ? "" : "\n") + std::string(k) + "=" + *v + "\n";
+                }
+            }
             if (edited != *text && !write_mode(R + f, edited, 0644, error)) return false;
         }
     }
@@ -761,7 +775,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         const std::string d = l.data + dir;
         if (!mkdirs_or_fail(d, error) || !write_mode(d + "/ipconfig.txt", ethernet_ipconfig(), 0644, error)) return false;
     }
-    // Where 10.0.2.3 points until the app's next update; no file falls back to 8.8.8.8
+    // Where 192.168.31.1 points until the app's next update; no file falls back to 8.8.8.8
     std::string dns;
     for (const std::string& s : o.dns) dns += s + "\n";
     if (!dns.empty() && !write_mode(l.store + "/dns", dns, 0644, error)) return false;

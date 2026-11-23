@@ -968,6 +968,53 @@ static long translate_at(struct tawcroot_path_scratch *scratch, int slot,
 }
 
 
+/* The proc/sys file a shadow memfd stands in for, written to `out`:
+ * readlink of the fd shows that path, as on a phone, not
+ * "/memfd:tawcroot-<kind> (deleted)". Length, or 0 for other links. */
+static long memfd_link_target(const char *link, long n, char *out, size_t cap)
+{
+	static const char pre[] = "/memfd:tawcroot-";
+	static const char del[] = " (deleted)";
+	const long pn = (long)sizeof pre - 1, dn = (long)sizeof del - 1;
+	if (n <= pn || memcmp(link, pre, (size_t)pn) != 0) return 0;
+	long end = n;
+	if (end - pn > dn && memcmp(link + end - dn, del, (size_t)dn) == 0) end -= dn;
+	char kind[64];
+	long k = end - pn;
+	if (k <= 0 || k >= (long)sizeof kind) return 0;
+	memcpy(kind, link + pn, (size_t)k);
+	kind[k] = 0;
+	static const struct { const char *kind, *self, *path; } map[] = {
+		{ "maps", "/maps", 0 }, { "mounts", "/mounts", 0 },
+		{ "cgroup", "/cgroup", 0 }, { "tcp", "/net/tcp", 0 },
+		{ "cpuinfo", 0, "/proc/cpuinfo" }, { "version", 0, "/proc/version" },
+		{ "stat", 0, "/proc/stat" }, { "uptime", 0, "/proc/uptime" },
+		{ "loadavg", 0, "/proc/loadavg" }, { "cmdline", 0, "/proc/cmdline" },
+		{ "pci-devices", 0, "/proc/bus/pci/devices" },
+		{ "selinux-status", 0, "/sys/fs/selinux/status" },
+		{ "selinux-enforce", 0, "/sys/fs/selinux/enforce" },
+	};
+	size_t o = 0;
+	if (!memcmp(kind, "proc:", 5)) {
+		if (tawc_str_append(out, cap, &o, "/proc/") ||
+		    tawc_str_append(out, cap, &o, kind + 5))
+			return 0;
+		return (long)o;
+	}
+	for (size_t i = 0; i < sizeof map / sizeof map[0]; i++) {
+		if (!tawc_streq(kind, map[i].kind)) continue;
+		if (map[i].path) {
+			if (tawc_str_append(out, cap, &o, map[i].path)) return 0;
+		} else if (tawc_str_append(out, cap, &o, "/proc/") ||
+			   tawc_str_append_dec(out, cap, &o, tawc_getpid()) ||
+			   tawc_str_append(out, cap, &o, map[i].self)) {
+			return 0;
+		}
+		return (long)o;
+	}
+	return 0;
+}
+
 static long handle_readlinkat(const tawcroot_syscall_args *args,
 			      ucontext_t *uc)
 {
@@ -1140,6 +1187,14 @@ static long handle_readlinkat(const tawcroot_syscall_args *args,
 	if (link_cls == TAWCROOT_PROC_LINK_FD && n > 0 &&
 	    readlink_scratch[0] == '/') {
 		char *guest = scratch->buf[2];
+		long mn = memfd_link_target(readlink_scratch, n, guest,
+					    TAWCROOT_PATH_SCRATCH_SIZE);
+		if (mn > 0) {
+			if (mn > (long)size) mn = size;
+			long me = tawc_copy_to_guest(buf, guest, (size_t)mn);
+			if (me < 0) return me;
+			return mn;
+		}
 		long gn = tawcroot_host_path_to_guest_abs(
 			readlink_scratch, (size_t)n,
 			guest, TAWCROOT_PATH_SCRATCH_SIZE);

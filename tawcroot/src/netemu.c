@@ -109,7 +109,7 @@ struct ne_ifreq {
 };
 _Static_assert(sizeof(struct ne_ifreq) == 40, "struct ifreq is 40 bytes");
 
-static const uint8_t eth_mac[6] = { 0x02, 0x00, 0x00, 0x57, 0x44, 0x01 };
+static const uint8_t eth_mac[6] = { 0xa6, 0x3c, 0x7e, 0x91, 0x5d, 0x28 };
 
 static int enabled(void)
 {
@@ -1159,7 +1159,7 @@ static const char *const sys_lo[] = {
 	"uevent", "INTERFACE=lo\nIFINDEX=1", 0
 };
 static const char *const sys_eth[] = {
-	"ifindex", "2", "iflink", "2", "address", "02:00:00:57:44:01",
+	"ifindex", "2", "iflink", "2", "address", "a6:3c:7e:91:5d:28",
 	"broadcast", "ff:ff:ff:ff:ff:ff", "mtu", "1500", "flags", "0x1003",
 	"operstate", "up", "carrier", "1", "type", "1", "addr_len", "6",
 	"tx_queue_len", "1000", "dev_id", "0x0", "dev_port", "0", "addr_assign_type", "3",

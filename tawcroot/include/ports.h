@@ -11,7 +11,7 @@ enum { TAWC_PORTS_BIND, TAWC_PORTS_TO, TAWC_PORTS_LOCAL, TAWC_PORTS_PEER };
 /* Rewrite an AF_INET/AF_INET6 sockaddr in place: guest→host for BIND
  * (any address) and TO (loopback destinations), host→guest for LOCAL
  * (getsockname) and PEER (loopback sources). 1 if it changed. Also
- * redirects the guest's virtual DNS server, 10.0.2.3:53 (see ports.c). */
+ * redirects the guest's virtual DNS server, 192.168.31.1:53 (see ports.c). */
 int tawcroot_ports_rewrite(void *sa, long len, int dir);
 
 /* Seconds the guest may cache an answer from its virtual DNS server. */

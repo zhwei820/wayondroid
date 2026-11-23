@@ -38,6 +38,13 @@ int tawcroot_namespace_is_userns_link(const char *path);
 
 /* Whether `pid` is the fake init or a descendant (1 without an init). */
 int tawcroot_namespace_is_guest(long pid);
+/* Whether /proc/<pid> exists for the caller: a guest process, and for an
+ * app (uid 10000+) only its own uid's processes and its own threads, as
+ * procfs mounted hidepid=2 shows a phone's apps. */
+int tawcroot_namespace_pid_visible(long pid);
+/* TAWC_ENOENT when absolute `path` is /proc/<pid> or below for a pid
+ * the caller may not see, else 0. */
+long tawcroot_namespace_proc_path_hidden(const char *path);
 /* In a child of the init: SIGKILL it when the init dies. */
 void tawcroot_namespace_tie_to_init(void);
 /* Init sessions: per-process virtual ids for SO_PEERCRED. */

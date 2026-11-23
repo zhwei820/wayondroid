@@ -421,7 +421,7 @@ static long hide_host_pids(char *buf, long n)
 		long pid = 0;
 		const char *c = name;
 		for (; *c >= '0' && *c <= '9'; ++c) pid = pid * 10 + (*c - '0');
-		int keep = *c || !pid || tawcroot_namespace_is_guest(pid);
+		int keep = *c || !pid || tawcroot_namespace_pid_visible(pid);
 		if (keep) {
 			if (out != off) memmove(buf + out, buf + off, reclen);
 			out += reclen;

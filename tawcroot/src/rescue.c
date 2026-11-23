@@ -32,6 +32,9 @@
 #include "dispatch.h"
 #include "errno_neg.h"
 #include "identity.h"
+#include "io.h"
+#include "namespace.h"
+#include "usercopy.h"
 #include "path.h"
 #include "raw_sys.h"
 #include "rescue.h"
@@ -347,6 +350,30 @@ long tawcroot_dispatch_call(const tawcroot_syscall_args *args, ucontext_t *uc)
 {
 	tawcroot_handler_fn fn = tawcroot_dispatch_get((int)args->nr);
 	if (!fn) return TAWC_ENOSYS;
+
+	/* hidepid=2 for apps: other uids' /proc/<pid> does not exist */
+	switch (args->nr) {
+	case TAWC_SYS_openat: case TAWC_SYS_fstatat: case TAWC_SYS_faccessat:
+	case TAWC_SYS_faccessat2: case TAWC_SYS_readlinkat: case TAWC_SYS_statx: {
+		char p[64];
+		long got;
+		if (tawcroot_identity_euid() % 100000 >= 10000 &&
+		    ((got = tawc_copy_string_from_guest(p, sizeof p, (const char *)args->b)) >= 0 ||
+		     got == TAWC_ENAMETOOLONG)) {
+			/* A longer path's head is enough: only /proc/<pid>/ matters */
+			p[sizeof p - 1] = 0;
+			long hidden = tawcroot_namespace_proc_path_hidden(p);
+			if (hidden) return hidden;
+			/* Apps may not read default_prop on a phone (bionic logs
+			 * "Access denied finding property"); here it holds
+			 * waydroid.* and ro.lineage.*, which mark the guest */
+			if (args->nr == TAWC_SYS_openat &&
+			    tawc_streq(p, "/dev/__properties__/u:object_r:default_prop:s0"))
+				return TAWC_EACCES;
+		}
+		break;
+	}
+	}
 
 	long rv = fn(args, uc);
 	/* Virtual euid is only consulted here, on the cold path: a guest

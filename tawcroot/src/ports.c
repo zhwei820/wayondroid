@@ -8,10 +8,10 @@
  * stacked filter traps their receives; stream receives carry no
  * address and stay untrapped.
  *
- * DNS: the guest's one resolver is the virtual 10.0.2.3:53. Queries to
+ * DNS: the guest's one resolver is the virtual 192.168.31.1:53. Queries to
  * it leave for the first IPv4 address in <store>/dns, which the app
  * rewrites when the phone's network or VPN changes, and replies from
- * that server come back as 10.0.2.3: the guest resolver checks the
+ * that server come back as 192.168.31.1: the guest resolver checks the
  * source. No file (or no IPv4 in it) means 8.8.8.8. The guest never sees
  * its resolver change, so its cache is never flushed: replies' TTLs are
  * capped at TAWCROOT_DNS_TTL_CAP for answers from the old network (a
@@ -64,7 +64,7 @@ static int loopback(const unsigned char *sa, long len)
     return a[15] == 1;
 }
 
-static const unsigned char vdns[4] = { 10, 0, 2, 3 };
+static const unsigned char vdns[4] = { 192, 168, 31, 1 };
 
 /* First dotted quad in `text` (one address per line), 1 if found. */
 int tawcroot_ports_parse_dns(const char *text, long n, unsigned char out[4])

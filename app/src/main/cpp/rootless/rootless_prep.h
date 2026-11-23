@@ -50,6 +50,7 @@ std::string props_64bit_only(const std::string& build_prop);
 // The phone's identity, which the guest presents instead of Waydroid's
 struct DeviceIdentity {
     std::string brand, manufacturer, model, name, device, board, incremental, hardware;
+    std::string build_host, flavor, soc_manufacturer, soc_model;
     bool empty() const { return brand.empty() || model.empty() || device.empty(); }
 };
 

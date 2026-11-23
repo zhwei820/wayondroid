@@ -164,6 +164,24 @@ static long out_write(char *out, size_t out_cap, size_t *off,
 	return 0;
 }
 
+/* The engine's own mappings (libtawcroot.so from the host app's lib
+ * dir, its store files, memfds and fastpath stubs): an app would read
+ * them as a foreign library injected into its process. */
+static int maps_line_hidden(const char *p, size_t n)
+{
+	static const char *const marks[] = { "tawcroot", "com.hexadecinull.vineos", "libvine_" };
+	for (size_t m = 0; m < sizeof marks / sizeof marks[0]; m++) {
+		size_t k = 0;
+		while (marks[m][k]) k++;
+		for (size_t i = 0; i + k <= n; i++) {
+			size_t j = 0;
+			while (j < k && p[i + j] == marks[m][j]) j++;
+			if (j == k) return 1;
+		}
+	}
+	return 0;
+}
+
 long tawcroot_proc_maps_rewrite(
 	const tawcroot_proc_rewrite_ctx *ctx,
 	const char *in, size_t in_len,
@@ -194,6 +212,10 @@ long tawcroot_proc_maps_rewrite(
 		 *   - anything else → emit verbatim (defensive) */
 		const char *p = line + path_off;
 		int do_rewrite = (path_len > 0 && p[0] == '/');
+		if (maps_line_hidden(p, path_len)) {
+			i = has_nl ? line_end + 1 : line_end;
+			continue;
+		}
 
 		/* Emit prefix (everything up to the path field) verbatim. */
 		long e = out_write(out, out_cap, &out_off, line, path_off);

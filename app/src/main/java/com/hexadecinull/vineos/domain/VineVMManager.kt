@@ -88,7 +88,7 @@ class VineVMManager @Inject constructor(
         .distinct()
         .take(4)
 
-    // The guest's resolver is a virtual 10.0.2.3 that tawcroot points at <instance>/rootless/tawcroot/dns, so a new network
+    // The guest's resolver is a virtual 192.168.31.1 that tawcroot points at <instance>/rootless/tawcroot/dns, so a new network
     // or VPN reaches running guests at once. Written for every rootless instance; a stopped one gets it again on start.
     private fun publishDns(servers: List<String>) {
         if (servers.isEmpty()) return
