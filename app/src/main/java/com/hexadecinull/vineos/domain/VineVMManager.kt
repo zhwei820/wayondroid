@@ -3,6 +3,8 @@ package com.hexadecinull.vineos.domain
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.os.Build
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
@@ -72,15 +74,46 @@ class VineVMManager @Inject constructor(
     private val deletingFlow = MutableStateFlow<Set<String>>(emptySet())
     val deletingInstances: StateFlow<Set<String>> = deletingFlow.asStateFlow()
 
-    // The guest's traffic leaves through the app's own sockets, so the phone's resolvers (often the router) answer it fastest.
-    // IPv4 first; link-local ones need a scope the guest's eth0 does not have.
+    // The guest's traffic leaves through the app's own sockets, so the phone's resolvers (often the router, or a VPN's) answer
+    // it best. IPv4 first, as tawcroot forwards to the first IPv4 one; link-local ones need a scope the guest lacks.
     private fun hostDnsServers(): List<String> = runCatching {
         val cm = context.getSystemService(ConnectivityManager::class.java)
-        val servers = cm.getLinkProperties(cm.activeNetwork)?.dnsServers.orEmpty()
-            .filter { !it.isLinkLocalAddress && !it.isLoopbackAddress && !it.isAnyLocalAddress }
-            .sortedBy { if (it is Inet4Address) 0 else 1 }
-        servers.mapNotNull { it.hostAddress?.substringBefore('%') }.distinct().take(4)
+        dnsServersOf(cm.getLinkProperties(cm.activeNetwork))
     }.getOrDefault(emptyList())
+
+    private fun dnsServersOf(lp: LinkProperties?): List<String> = lp?.dnsServers.orEmpty()
+        .filter { !it.isLinkLocalAddress && !it.isLoopbackAddress && !it.isAnyLocalAddress }
+        .sortedBy { if (it is Inet4Address) 0 else 1 }
+        .mapNotNull { it.hostAddress?.substringBefore('%') }
+        .distinct()
+        .take(4)
+
+    // The guest's resolver is a virtual 10.0.2.3 that tawcroot points at <instance>/rootless/tawcroot/dns, so a new network
+    // or VPN reaches running guests at once. Written for every rootless instance; a stopped one gets it again on start.
+    private fun publishDns(servers: List<String>) {
+        if (servers.isEmpty()) return
+        val text = servers.joinToString("\n", postfix = "\n")
+        provisioner.instancesDir.listFiles()?.forEach { dir ->
+            val store = File(dir, "rootless/tawcroot")
+            if (!store.isDirectory) return@forEach
+            runCatching {
+                val tmp = File(store, "dns.tmp")
+                tmp.writeText(text)
+                tmp.renameTo(File(store, "dns"))
+            }
+        }
+    }
+
+    // What the default-network callback last saw: what start passes, since activeNetwork can lag a VPN coming up
+    @Volatile private var latestDns: List<String> = emptyList()
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+            val servers = dnsServersOf(linkProperties)
+            if (servers.isNotEmpty()) latestDns = servers
+            scope.launch { publishDns(servers) }
+        }
+    }
 
     // Same filesystem as the instances, so the move is a rename. Declared before init, which empties it.
     private val trashDir = File(context.filesDir, "trash")
@@ -117,6 +150,7 @@ class VineVMManager @Inject constructor(
         scope.launch { helper.events.collect { onHelperEvent(it, rootless = false) } }
         scope.launch { rootlessHelper.events.collect { onHelperEvent(it, rootless = true) } }
         scope.launch { emptyTrash() }
+        runCatching { context.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback) }
     }
 
     // System-as-root images (Waydroid, no ramdisk) boot on the rootless engine, the others need root
@@ -175,7 +209,7 @@ class VineVMManager @Inject constructor(
             "refresh=${instance.refreshHz}",
             "network=${if (prefs.guestNetwork.first()) "nat" else "none"}",
             "graphics=${if (prefs.gpuAcceleration.first()) "gfxstream" else "cpu"}",
-            "dns=${hostDnsServers().joinToString(",")}",
+            "dns=${latestDns.ifEmpty { hostDnsServers() }.joinToString(",")}",
             "qemu32=${if (needs32) 1 else 0}",
             timeoutMs = 120_000,
         )

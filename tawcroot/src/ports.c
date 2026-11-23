@@ -6,13 +6,21 @@
  * (getsockname, getpeername, accept, recvfrom/recvmsg sources) shift
  * back. Datagram sockets live above the reserved fd floor, where a
  * stacked filter traps their receives; stream receives carry no
- * address and stay untrapped. */
+ * address and stay untrapped.
+ *
+ * DNS: the guest's one resolver is the virtual 10.0.2.3:53. Queries to
+ * it leave for the first IPv4 address in <store>/dns, which the app
+ * rewrites when the phone's network or VPN changes, and replies from
+ * that server come back as 10.0.2.3: the guest resolver checks the
+ * source. No file (or no IPv4 in it) means 8.8.8.8. */
 #include <stdint.h>
 #include <fcntl.h>
 #include <asm/unistd.h>
 #include "ports.h"
 #include "errno_neg.h"
 #include "fdtab.h"
+#include "linkstore.h"
+#include "path_scratch.h"
 #include "filter.h"
 #include "io.h"
 #include "namespace.h"
@@ -53,11 +61,73 @@ static int loopback(const unsigned char *sa, long len)
     return a[15] == 1;
 }
 
+static const unsigned char vdns[4] = { 10, 0, 2, 3 };
+
+/* First dotted quad in `text` (one address per line), 1 if found. */
+int tawcroot_ports_parse_dns(const char *text, long n, unsigned char out[4])
+{
+    long i = 0;
+    while (i < n) {
+        unsigned char ip[4];
+        int part = 0, ok = 1;
+        while (ok && part < 4) {
+            unsigned v = 0, digits = 0;
+            while (i < n && text[i] >= '0' && text[i] <= '9' && digits < 4) v = v * 10 + (unsigned)(text[i++] - '0'), ++digits;
+            if (!digits || v > 255) ok = 0;
+            else ip[part++] = (unsigned char)v;
+            if (ok && part < 4) {
+                if (i < n && text[i] == '.') ++i;
+                else ok = 0;
+            }
+        }
+        if (ok && (i == n || text[i] == '\n' || text[i] == '\r')) {
+            memcpy(out, ip, 4);
+            return 1;
+        }
+        while (i < n && text[i] != '\n') ++i;
+        ++i;
+    }
+    return 0;
+}
+
+static void host_dns(unsigned char out[4])
+{
+    static const unsigned char fallback[4] = { 8, 8, 8, 8 };
+    memcpy(out, fallback, 4);
+    if (!tawcroot_store_host_path_len) return;
+    TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+    char *path = scratch->buf[0];
+    size_t pos = 0;
+    if (tawc_str_append(path, TAWCROOT_PATH_SCRATCH_SIZE, &pos, tawcroot_store_host_path) ||
+        tawc_str_append(path, TAWCROOT_PATH_SCRATCH_SIZE, &pos, "/dns"))
+        return;
+    long fd = tawc_openat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) return;
+    char text[256];
+    long n = tawc_read((int)fd, text, sizeof text);
+    tawc_close((int)fd);
+    if (n > 0) (void)tawcroot_ports_parse_dns(text, n, out);
+}
+
 int tawcroot_ports_rewrite(void *p, long len, int dir)
 {
     unsigned char *sa = p;
     if (!session() || len < 4 || sa[1] != 0 || (sa[0] != INET && sa[0] != INET6)) return 0;
     unsigned port = (unsigned)sa[2] << 8 | sa[3];
+    if (sa[0] == INET && len >= 8 && port == 53 && (dir == TAWC_PORTS_TO || dir == TAWC_PORTS_PEER)) {
+        unsigned char host[4];
+        if (dir == TAWC_PORTS_TO && !memcmp(sa + 4, vdns, 4)) {
+            host_dns(sa + 4);
+            return 1;
+        }
+        if (dir == TAWC_PORTS_PEER) {
+            host_dns(host);
+            if (!memcmp(sa + 4, host, 4)) {
+                memcpy(sa + 4, vdns, 4);
+                return 1;
+            }
+        }
+    }
     if (dir == TAWC_PORTS_BIND || dir == TAWC_PORTS_TO) {
         if (!port || port >= 1024 || (dir == TAWC_PORTS_TO && !loopback(sa, len))) return 0;
         port += TAWCROOT_PORT_SHIFT;
@@ -135,8 +205,9 @@ static void unshift(uint64_t gaddr, uint64_t glenp, uint32_t len)
     }
     if (len > sizeof sa) len = sizeof sa;
     if (tawc_copy_from_guest(sa, len, (const void *)(uintptr_t)gaddr) < 0) return;
+    /* family, port and, for the DNS rewrite, the IPv4 address */
     if (tawcroot_ports_rewrite(sa, len, TAWC_PORTS_PEER))
-        (void)tawc_copy_to_guest((void *)(uintptr_t)gaddr, sa, 4);
+        (void)tawc_copy_to_guest((void *)(uintptr_t)gaddr, sa, len >= 8 ? 8 : 4);
 }
 
 static void unshift_msg(uint64_t gmsg)
