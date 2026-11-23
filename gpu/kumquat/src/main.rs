@@ -151,7 +151,7 @@ fn install_crash_report() {
     // SAFETY: a plain sigaction with a handler that only reads its context
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = crash_report as usize;
+        sa.sa_sigaction = crash_report as *const () as usize;
         sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND;
         libc::sigemptyset(&mut sa.sa_mask);
         for sig in [libc::SIGSEGV, libc::SIGBUS, libc::SIGILL] {
