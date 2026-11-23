@@ -82,7 +82,7 @@ Gradle 会先构建 tawcroot 和 binderd，放进 `app/src/main/jniLibs/<abi>/`
 Release 构建：
 
 ```sh
-./gradlew :app:assembleRelease --no-watch-fs
+#./gradlew :app:assembleRelease --no-watch-fs
 ```
 
 根目录有 `keystore.properties`（`storeFile`、`storePassword`、`keyAlias`、`keyPassword`）
