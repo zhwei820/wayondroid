@@ -155,7 +155,7 @@ EOF
 
     echo "==> [$abi] built libgfxstream_backend.so:"
     ls -la "$OUT_DIR/libgfxstream_backend.so"
-    file "$OUT_DIR/libgfxstream_backend.so"
+    if command -v file >/dev/null; then file "$OUT_DIR/libgfxstream_backend.so"; fi
     echo "==> [$abi] staged jniLibs:"
     ls -la "$JNILIBS_DIR/libgfxstream_backend.so" "$JNILIBS_DIR/libc++_shared.so"
 }
