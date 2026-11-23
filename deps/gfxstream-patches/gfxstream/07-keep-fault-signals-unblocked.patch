@@ -1,0 +1,35 @@
+From: wayondroid
+Origin: own
+
+Threads that mask all signals keep SIGSEGV, SIGBUS, SIGILL and SIGFPE:
+a fault in a thread blocking its signal kills the process before any
+handler runs, so a renderer crash left no report and no tombstone.
+
+--- a/common/base/Thread_pthread.cpp
++++ b/common/base/Thread_pthread.cpp
+@@ -164,6 +164,12 @@
+ void Thread::maskAllSignals() {
+     sigset_t set;
+     sigfillset(&set);
++    // A fault in a thread that blocks its signal kills the process with
++    // no handler run: no crash report, no tombstone
++    sigdelset(&set, SIGSEGV);
++    sigdelset(&set, SIGBUS);
++    sigdelset(&set, SIGILL);
++    sigdelset(&set, SIGFPE);
+     pthread_sigmask(SIG_SETMASK, &set, nullptr);
+ }
+ 
+--- a/host/render_window.cpp
++++ b/host/render_window.cpp
+@@ -366,6 +366,10 @@
+ #ifndef _WIN32
+         sigset_t set;
+         sigfillset(&set);
++        sigdelset(&set, SIGSEGV);
++        sigdelset(&set, SIGBUS);
++        sigdelset(&set, SIGILL);
++        sigdelset(&set, SIGFPE);
+         pthread_sigmask(SIG_SETMASK, &set, NULL);
+ #endif
+         bool running = true;

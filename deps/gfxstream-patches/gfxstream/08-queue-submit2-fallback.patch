@@ -1,0 +1,100 @@
+From: wayondroid
+Origin: own
+
+vkQueueSubmit2 is core only from Vulkan 1.3; on a lower device (Adreno
+730 reports 1.1) the dispatch entry is null and the renderer jumped to
+address 0. Use vkQueueSubmit2KHR, else vkQueueSubmit with the submits
+converted.
+
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -3975,8 +3975,8 @@
+                         VkResult res = VK_SUCCESS;
+                         if (pendingSubmitCall->mSubmitInfo2s.size()) {
+                             // Deferred vkQueueSubmit2 call
+-                            res = deviceDispatch->vkQueueSubmit2(
+-                                unboxed_queue, pendingSubmitCall->mSubmitInfo2s.size(),
++                            res = queueSubmit2Compat(
++                                deviceDispatch, unboxed_queue, pendingSubmitCall->mSubmitInfo2s.size(),
+                                 pendingSubmitCall->mSubmitInfo2s.data(), pendingSubmitCall->mFence);
+ 
+                             if (res == VK_SUCCESS) {
+@@ -7151,11 +7151,77 @@
+         }
+ 
+         return VK_SUCCESS;
++    }
++
++    // vkQueueSubmit2 is core only from Vulkan 1.3: a device below that
++    // (Adreno 730 reports 1.1) leaves it null. Fall back to the KHR entry
++    // point, else to vkQueueSubmit with the submits converted.
++    static VkResult queueSubmit2Compat(VulkanDispatch* vk, VkQueue queue, uint32_t submitCount,
++                                       const VkSubmitInfo2* pSubmits, VkFence fence) {
++        if (vk->vkQueueSubmit2) return vk->vkQueueSubmit2(queue, submitCount, pSubmits, fence);
++        if (vk->vkQueueSubmit2KHR) {
++            return vk->vkQueueSubmit2KHR(queue, submitCount, pSubmits, fence);
++        }
++        auto stages = [](VkPipelineStageFlags2 m) -> VkPipelineStageFlags {
++            VkPipelineStageFlags legacy = static_cast<VkPipelineStageFlags>(m & 0xffffffffull);
++            if ((m >> 32) || !legacy) legacy |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
++            return legacy;
++        };
++        struct Converted {
++            std::vector<VkSemaphore> waits, signals;
++            std::vector<VkPipelineStageFlags> waitStages;
++            std::vector<uint64_t> waitValues, signalValues;
++            std::vector<VkCommandBuffer> cbs;
++            VkTimelineSemaphoreSubmitInfo timeline;
++        };
++        std::vector<Converted> conv(submitCount);
++        std::vector<VkSubmitInfo> infos(submitCount);
++        for (uint32_t i = 0; i < submitCount; i++) {
++            const VkSubmitInfo2& in = pSubmits[i];
++            Converted& c = conv[i];
++            bool timeline = false;
++            for (uint32_t j = 0; j < in.waitSemaphoreInfoCount; j++) {
++                const VkSemaphoreSubmitInfo& w = in.pWaitSemaphoreInfos[j];
++                c.waits.push_back(w.semaphore);
++                c.waitStages.push_back(stages(w.stageMask));
++                c.waitValues.push_back(w.value);
++                timeline |= w.value != 0;
++            }
++            for (uint32_t j = 0; j < in.signalSemaphoreInfoCount; j++) {
++                const VkSemaphoreSubmitInfo& sg = in.pSignalSemaphoreInfos[j];
++                c.signals.push_back(sg.semaphore);
++                c.signalValues.push_back(sg.value);
++                timeline |= sg.value != 0;
++            }
++            for (uint32_t j = 0; j < in.commandBufferInfoCount; j++) {
++                c.cbs.push_back(in.pCommandBufferInfos[j].commandBuffer);
++            }
++            c.timeline = {
++                .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
++                .pNext = nullptr,
++                .waitSemaphoreValueCount = static_cast<uint32_t>(c.waitValues.size()),
++                .pWaitSemaphoreValues = c.waitValues.data(),
++                .signalSemaphoreValueCount = static_cast<uint32_t>(c.signalValues.size()),
++                .pSignalSemaphoreValues = c.signalValues.data(),
++            };
++            infos[i] = {
++                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
++                .pNext = timeline ? &c.timeline : nullptr,
++                .waitSemaphoreCount = static_cast<uint32_t>(c.waits.size()),
++                .pWaitSemaphores = c.waits.data(),
++                .pWaitDstStageMask = c.waitStages.data(),
++                .commandBufferCount = static_cast<uint32_t>(c.cbs.size()),
++                .pCommandBuffers = c.cbs.data(),
++                .signalSemaphoreCount = static_cast<uint32_t>(c.signals.size()),
++                .pSignalSemaphores = c.signals.data(),
++            };
++        }
++        return vk->vkQueueSubmit(queue, submitCount, infos.data(), fence);
+     }
+ 
+     VkResult dispatchVkQueueSubmit(VulkanDispatch* vk, VkQueue unboxed_queue, uint32_t submitCount,
+                                    const VkSubmitInfo2* pSubmits, VkFence fence) {
+-        VkResult res = vk->vkQueueSubmit2(unboxed_queue, submitCount, pSubmits, fence);
++        VkResult res = queueSubmit2Compat(vk, unboxed_queue, submitCount, pSubmits, fence);
+         if (res != VK_SUCCESS) {
+             return res;
+         }

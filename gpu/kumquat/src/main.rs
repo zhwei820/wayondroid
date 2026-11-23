@@ -147,17 +147,44 @@ static LOGGER: StderrLog = StderrLog;
 /// as library+offset, to stderr (vine_kumquat.log), then the default
 /// death. The vendor drops this app's logcat past a budget, tombstone
 /// lines included, so a crash would otherwise leave nothing to read.
+const CRASH_SIGNALS: [c_int; 3] = [libc::SIGSEGV, libc::SIGBUS, libc::SIGILL];
+
 fn install_crash_report() {
-    // SAFETY: a plain sigaction with a handler that only reads its context
+    // SAFETY: a plain sigaction with a handler that only reads its context.
+    // SA_ONSTACK: bionic gives every thread a signal stack, so a stack
+    // overflow still reports.
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
         sa.sa_sigaction = crash_report as *const () as usize;
-        sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND;
+        sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND | libc::SA_ONSTACK;
         libc::sigemptyset(&mut sa.sa_mask);
-        for sig in [libc::SIGSEGV, libc::SIGBUS, libc::SIGILL] {
+        for sig in CRASH_SIGNALS {
             libc::sigaction(sig, &sa, std::ptr::null_mut());
         }
     }
+    // A library loaded later (the host's Vulkan driver) may take these
+    // signals over and exit quietly: name it, and take them back
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        for sig in CRASH_SIGNALS {
+            // SAFETY: querying and resetting a handler
+            unsafe {
+                let mut old: libc::sigaction = std::mem::zeroed();
+                libc::sigaction(sig, std::ptr::null(), &mut old);
+                if old.sa_sigaction != crash_report as *const () as usize {
+                    let mut l = Line::new();
+                    l.str(b"vine_kumquat: signal ").hex(sig as u64).str(b" handler replaced by");
+                    l.emit();
+                    report_frame(old.sa_sigaction as u64);
+                    let mut sa: libc::sigaction = std::mem::zeroed();
+                    sa.sa_sigaction = crash_report as *const () as usize;
+                    sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND | libc::SA_ONSTACK;
+                    libc::sigemptyset(&mut sa.sa_mask);
+                    libc::sigaction(sig, &sa, std::ptr::null_mut());
+                }
+            }
+        }
+    });
 }
 
 struct Line {
