@@ -34,6 +34,9 @@ security find-certificate -a -c "Zscaler Root CA" -p /Library/Keychains/System.k
 
 ```sh
 docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -e JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts -Djavax.net.ssl.trustStorePassword=changeit" -e ANDROID_HOME=/root/Android/Sdk -v ~/docker-certs:/certificates:ro -v wayondroid-sdk:/root/Android -v wayondroid-gradle:/root/.gradle -v "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash
+
+                                                   
+docker run --rm -it --platform linux/amd64 -e USE_SYSTEM_CA_CERTS=1 -e JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts -Djavax.net.ssl.trustStorePassword=changeit" -e    ANDROID_HOME=/root/Android/Sdk -v ~/docker-certs:/certificates:ro -v wayondroid-sdk:/root/Android -v wayondroid-gradle:/root/.gradle -v wayondroid-cargo:/root/.cargo -v wayondroid-rustup:/root/.rustup -v      "$PWD":/src -w /src eclipse-temurin:17-jdk-jammy bash                        
 ```
 
 - `USE_SYSTEM_CA_CERTS=1`：temurin 镜像启动时把 `/certificates/*.crt` 加进系统证书库和 JDK 17 的 cacerts。
@@ -92,15 +95,49 @@ Release 构建：
 ### GPU 加速组件（可选）
 
 不构建也能用，只是不能开 GPU 加速：开了的话启动会报 `this build has no GPU acceleration`。
-需要时在 `assembleDebug` **之前**运行：
+不开 GPU 时 guest 用 `gralloc.default` 分配缓冲区，它只支持 RGB 格式，视频解码要的 YV12 /
+YCbCr_420_888 分配失败（logcat 里 `GraphicBufferAllocator: Failed to allocate ... format
+842094169`），播视频的 App 会卡在重试里；GPU 模式的 gralloc（`gralloc_gpu.c`）支持这两种格式。
+
+`scripts/gpu/build-gpu.sh` 产出到 `app/src/main/jniLibs/arm64-v8a/`，只有 arm64：
+
+| 产物 | 作用 | 源码 |
+|---|---|---|
+| `libgfxstream_backend.so`、`libc++_shared.so` | 宿主侧渲染器，在手机 GPU 上执行 guest 的 Vulkan 命令 | gfxstream |
+| `libvine_vk_gfxstream.so` | guest 的 Vulkan 驱动，复制进 guest 的 `/vendor` | Mesa |
+| `libvine_kumquat.so` | guest 与宿主渲染器之间的 GPU 服务 | `gpu/kumquat` + rutabaga_gfx（Rust） |
+
+源码按 `deps/deps.list` 固定的提交克隆到 `deps/`，打上 `deps/*-patches/` 的补丁。源码加构建产物
+要几个 GB 磁盘。
+
+在上面的 Docker 容器里构建时，`docker run` 再加两个 volume 保存 Rust 工具链：
+`-v wayondroid-cargo:/root/.cargo -v wayondroid-rustup:/root/.rustup`。容器内：
 
 ```sh
-scripts/gpu/build-gpu.sh          # 加 --clean 从头构建
+
+sed -i 's#^sdk.dir=.*#sdk.dir=/root/Android/Sdk#' local.properties
+ANDROID_SDK_NATIVE=true ANDROID_NDK_VERSION=28.2.13676358 scripts/ci/setup-android-sdk.sh
+
+# 构建工具（每个新容器都要装）。Mesa 25.3 要 meson >= 1.4，jammy 的 apt 版本是 0.61
+apt-get update && apt-get install -y git curl pkg-config ninja-build python3-pip
+pip3 install 'meson>=1.4' mako packaging pyyaml
+
+# Rust（装一次，存在 volume 里）；两个变量让 rustup / cargo 用系统证书库（代理证书在里面）
+export RUSTUP_USE_CURL=1 CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt
+curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+. ~/.cargo/env
+rustup target add aarch64-linux-android
+
+# 仓库是挂载进来的，属主与容器的 root 不同，git 默认拒绝操作
+git config --global --add safe.directory '*'
+
+scripts/gpu/build-gpu.sh          # 加 --clean 从头构建；首次要克隆并编译，模拟下可能一小时以上
+./gradlew :app:assembleDebug --no-watch-fs
 ```
 
-额外依赖：`meson`、`ninja`、`pkg-config`、`cargo`（需要 Rust 的 `aarch64-linux-android`
-target）。只产出 `arm64-v8a`：`libgfxstream_backend.so`、`libvine_kumquat.so`、
-`libvine_vk_gfxstream.so`。
+GPU 组件必须在 `assembleDebug` **之前**构建。装上新包后，在 App 的 Settings 打开
+「GPU acceleration (experimental)」，停止并重新启动实例（启动时才生效）。GPU 加速是实验性的，
+只在 Mali（Galaxy S24）上测过；画面异常或崩溃时关掉开关即回到软件渲染。
 
 ### 测试
 
