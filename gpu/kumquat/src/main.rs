@@ -143,8 +143,123 @@ impl log::Log for StderrLog {
 
 static LOGGER: StderrLog = StderrLog;
 
+/// SIGSEGV/SIGBUS/SIGILL: the fault and the frame-pointer chain, each pc
+/// as library+offset, to stderr (vine_kumquat.log), then the default
+/// death. The vendor drops this app's logcat past a budget, tombstone
+/// lines included, so a crash would otherwise leave nothing to read.
+fn install_crash_report() {
+    // SAFETY: a plain sigaction with a handler that only reads its context
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = crash_report as usize;
+        sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND;
+        libc::sigemptyset(&mut sa.sa_mask);
+        for sig in [libc::SIGSEGV, libc::SIGBUS, libc::SIGILL] {
+            libc::sigaction(sig, &sa, std::ptr::null_mut());
+        }
+    }
+}
+
+struct Line {
+    buf: [u8; 512],
+    len: usize,
+}
+
+impl Line {
+    fn new() -> Self {
+        Line { buf: [0; 512], len: 0 }
+    }
+    fn str(&mut self, s: &[u8]) -> &mut Self {
+        for &b in s {
+            if self.len < self.buf.len() - 1 {
+                self.buf[self.len] = b;
+                self.len += 1;
+            }
+        }
+        self
+    }
+    fn hex(&mut self, v: u64) -> &mut Self {
+        let mut digits = [0u8; 16];
+        let mut n = 0;
+        let mut v = v;
+        loop {
+            digits[n] = b"0123456789abcdef"[(v & 15) as usize];
+            n += 1;
+            v >>= 4;
+            if v == 0 {
+                break;
+            }
+        }
+        self.str(b"0x");
+        while n > 0 {
+            n -= 1;
+            self.str(&digits[n..n + 1]);
+        }
+        self
+    }
+    fn emit(&mut self) {
+        self.str(b"\n");
+        // SAFETY: writing our own buffer to stderr
+        unsafe { libc::write(2, self.buf.as_ptr() as *const libc::c_void, self.len) };
+        self.len = 0;
+    }
+}
+
+fn report_frame(pc: u64) {
+    let mut l = Line::new();
+    l.str(b"  ").hex(pc);
+    // SAFETY: dladdr fills `info` with pointers into the loader's tables
+    unsafe {
+        let mut info: libc::Dl_info = std::mem::zeroed();
+        if libc::dladdr(pc as *const libc::c_void, &mut info) != 0 && !info.dli_fname.is_null() {
+            let lib = CStr::from_ptr(info.dli_fname).to_bytes();
+            let base = lib.iter().rposition(|&c| c == b'/').map_or(0, |i| i + 1);
+            l.str(b" ").str(&lib[base..]).str(b"+").hex(pc - info.dli_fbase as u64);
+            if !info.dli_sname.is_null() {
+                l.str(b" ").str(CStr::from_ptr(info.dli_sname).to_bytes())
+                    .str(b"+").hex(pc - info.dli_saddr as u64);
+            }
+        }
+    }
+    l.emit();
+}
+
+extern "C" fn crash_report(sig: c_int, _info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+    // Return addresses may carry a PAC signature above the 48-bit VA
+    const VA: u64 = 0xffff_ffff_ffff;
+    // SAFETY: the kernel passes a valid ucontext_t; a bad frame pointer
+    // faults again, which SA_RESETHAND turns into the default death
+    unsafe {
+        let mc = &(*(ctx as *const libc::ucontext_t)).uc_mcontext;
+        Line::new()
+            .str(b"vine_kumquat: signal ").hex(sig as u64)
+            .str(b" fault ").hex(mc.fault_address)
+            .str(b" tid ").hex(libc::gettid() as u64)
+            .emit();
+        report_frame(mc.pc);
+        report_frame(mc.regs[30] & VA);
+        let mut fp = mc.regs[29];
+        for _ in 0..40 {
+            if fp == 0 || fp % 8 != 0 {
+                break;
+            }
+            let next = *(fp as *const u64);
+            let ret = *((fp + 8) as *const u64) & VA;
+            if ret == 0 {
+                break;
+            }
+            report_frame(ret);
+            if next <= fp {
+                break;
+            }
+            fp = next;
+        }
+    }
+}
+
 fn main() {
     let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Warn));
+    install_crash_report();
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 && args.len() != 4 {
         eprintln!("usage: vine_kumquat GPU_SOCKET GRALLOC_SOCKET [AHB_SOCKET]");
