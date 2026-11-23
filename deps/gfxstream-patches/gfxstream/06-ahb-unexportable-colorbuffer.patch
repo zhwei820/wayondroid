@@ -1,0 +1,55 @@
+From: wayondroid
+Origin: own
+
+In AHB mode, a ColorBuffer whose memory the driver cannot export as an
+AHardwareBuffer falls back to plain device memory. Adreno 730 refuses
+R8_UNORM, which the guest gralloc allocates for R_8 and BLOB.
+
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -2971,6 +2971,45 @@
+     // that is external-able.
+     bool allocRes = allocExternalMemory(vk, &infoPtr->memory,
+                                         deviceAlignment, kNullopt, dedicatedImage, infoPtr);
++#if defined(__ANDROID__)
++    if (!allocRes && mDeviceInfo.externalMemoryMode == ExternalMemory::Mode::AndroidAHB) {
++        // Some drivers cannot export every format as an AHardwareBuffer
++        // (Adreno: R8_UNORM, which the guest's gralloc uses for R_8 and
++        // BLOB). Such a ColorBuffer is never shared with the host's
++        // display, so plain device memory backs it.
++        GFXSTREAM_WARNING("ColorBuffer %u (%s): no AHardwareBuffer export, using unshared memory",
++                          colorBufferHandle, string_VkFormat(vkFormat));
++        vk->vkDestroyImage(mDevice, infoPtr->image, nullptr);
++        infoPtr->image = VK_NULL_HANDLE;
++        imageCi->pNext = nullptr;
++        if (vk->vkCreateImage(mDevice, imageCi.get(), nullptr, &infoPtr->image) != VK_SUCCESS) {
++            GFXSTREAM_ERROR("Failed to create unshared Vulkan image for ColorBuffer %d",
++                            colorBufferHandle);
++            return false;
++        }
++        infoPtr->imageCreateInfoShallow = vk_make_orphan_copy(*imageCi);
++        vk->vkGetImageMemoryRequirements(mDevice, infoPtr->image, &infoPtr->imageMemReqs);
++        infoPtr->memory.size = infoPtr->imageMemReqs.size;
++        infoPtr->memory.typeIndex = getValidMemoryTypeIndex(infoPtr->imageMemReqs.memoryTypeBits,
++                                                            infoPtr->memoryProperty);
++        infoPtr->memory.dedicatedAllocation = false;
++        infoPtr->memory.mappedPtr = nullptr;
++        const VkMemoryAllocateInfo plainAi = {
++            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
++            .pNext = nullptr,
++            .allocationSize = infoPtr->memory.size,
++            .memoryTypeIndex = infoPtr->memory.typeIndex,
++        };
++        allocRes = vk->vkAllocateMemory(mDevice, &plainAi, nullptr, &infoPtr->memory.memory) ==
++                   VK_SUCCESS;
++        if (allocRes && (mDeviceInfo.memProps.memoryTypes[infoPtr->memory.typeIndex].propertyFlags &
++                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
++            allocRes = vk->vkMapMemory(mDevice, infoPtr->memory.memory, 0, infoPtr->memory.size,
++                                       0, &infoPtr->memory.mappedPtr) == VK_SUCCESS;
++        }
++        infoPtr->externalMemoryCompatible = false;
++    }
++#endif
+     if (!allocRes) {
+         GFXSTREAM_ERROR("Failed to allocate ColorBuffer with Vulkan backing.");
+         return false;
