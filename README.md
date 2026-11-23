@@ -6,6 +6,8 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
+English · [简体中文](README.zh-CN.md)
+
 </div>
 
 Wayondroid boots Waydroid's LineageOS 20 (Android 13) images inside a normal
