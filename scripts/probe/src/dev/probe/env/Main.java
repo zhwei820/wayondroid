@@ -49,7 +49,7 @@ public class Main extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         new Thread(() -> {
-            String[] steps = {"build", "props", "telephony", "network", "sensors", "gl", "files", "packages"};
+            String[] steps = {"build", "props", "telephony", "network", "sensors", "gl", "files", "hw", "packages"};
             for (String s : steps) {
                 try {
                     getClass().getDeclaredMethod(s).invoke(this);
@@ -254,6 +254,60 @@ public class Main extends Activity {
         }
         // AOSP's plat_property_contexts gives every device the qemu_* property areas
         put("proc.self.maps.marks", grep(read("/proc/self/maps", 5000).replaceAll("(?m)^.*/dev/__properties__/u:object_r:qemu_[a-z_]*prop:s0$", ""), MARK.pattern()));
+    }
+
+    void hw() {
+        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(dm);
+        put("display", dm.widthPixels + "x" + dm.heightPixels + " dpi=" + dm.densityDpi + " xdpi=" + dm.xdpi);
+        put("display.mode", getWindowManager().getDefaultDisplay().getMode());
+        android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+        ((android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(mi);
+        put("mem.total", mi.totalMem);
+        put("proc.meminfo", grep(read("/proc/meminfo", 3), "Mem"));
+        android.os.StatFs fs = new android.os.StatFs("/data");
+        put("statfs.data", fs.getTotalBytes() + " free=" + fs.getAvailableBytes());
+        put("runtime.cpus", Runtime.getRuntime().availableProcessors());
+        StringBuilder f = new StringBuilder();
+        for (int c = 0; c < 8; c++) {
+            String d = "/sys/devices/system/cpu/cpu" + c;
+            f.append(c).append(':').append(read(d + "/cpufreq/cpuinfo_max_freq", 1).trim()).append('/')
+                    .append(read(d + "/cpufreq/cpuinfo_min_freq", 1).trim()).append(" rel=")
+                    .append(read(d + "/cpufreq/related_cpus", 1).trim()).append(" midr=")
+                    .append(read(d + "/regs/identification/midr_el1", 1).trim()).append("; ");
+        }
+        put("cpufreq", f);
+        String[] pol = new File("/sys/devices/system/cpu/cpufreq").list();
+        if (pol != null) java.util.Arrays.sort(pol);
+        put("cpufreq.policies", pol == null ? "unreadable" : String.join(" ", pol));
+        put("sys.cpu.possible", read("/sys/devices/system/cpu/possible", 1).trim() + " online=" + read("/sys/devices/system/cpu/online", 1).trim());
+        put("proc.cpuinfo.full", read("/proc/cpuinfo", 400));
+        put("uname.osrelease", read("/proc/sys/kernel/osrelease", 1));
+        try {
+            Object os = Class.forName("android.system.Os").getMethod("uname").invoke(null);
+            put("uname", os.getClass().getField("release").get(os) + " | " + os.getClass().getField("version").get(os));
+        } catch (Exception e) { put("uname", "ERR " + e); }
+        put("proc.self.cgroup", read("/proc/self/cgroup", 20));
+        put("proc.self.mountinfo.marks", grep(read("/proc/self/mountinfo", 3000), MARK.pattern()));
+        put("proc.self.status", grep(read("/proc/self/status", 80), "Seccomp|TracerPid|NoNewPrivs|Cpus_allowed_list"));
+        try {
+            android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
+            put("camera.ids", String.join(",", cm.getCameraIdList()));
+        } catch (Exception e) { put("camera.ids", "ERR " + e); }
+        StringBuilder feat = new StringBuilder();
+        for (android.content.pm.FeatureInfo fi : getPackageManager().getSystemAvailableFeatures())
+            if (fi.name != null && fi.name.matches(".*(camera|bluetooth|nfc|fingerprint).*")) feat.append(fi.name).append(' ');
+        put("features.hw", feat);
+        android.bluetooth.BluetoothAdapter ba = android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+        try { put("bt", ba == null ? "null" : ba.isEnabled() + " name=" + ba.getName() + " addr=" + ba.getAddress()); }
+        catch (Exception e) { put("bt", "ERR " + e); }
+        android.content.Intent bat = registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+        if (bat != null) put("battery", "level=" + bat.getIntExtra("level", -1) + " plugged=" + bat.getIntExtra("plugged", -1)
+                + " status=" + bat.getIntExtra("status", -1) + " volt=" + bat.getIntExtra("voltage", -1)
+                + " temp=" + bat.getIntExtra("temperature", -1) + " tech=" + bat.getStringExtra("technology"));
+        put("Build.BOOTLOADER", Build.BOOTLOADER);
+        put("prop.revision", prop("ro.revision") + " hw=" + prop("ro.boot.hardware.revision") + " bootmode=" + prop("ro.bootmode"));
+        put("gl.egl.prop", prop("ro.hardware.egl"));
     }
 
     static String grep(String text, String re) {
