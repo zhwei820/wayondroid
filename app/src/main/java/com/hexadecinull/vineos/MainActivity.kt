@@ -1,6 +1,8 @@
 package com.hexadecinull.vineos
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -8,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -71,6 +74,9 @@ class MainActivity : ComponentActivity() {
 
     private var pendingRoute by mutableStateOf<String?>(null)
 
+    // The guest's cameras are the phone's (vine_camera); without it they show a test scene
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
         GuestKeys.handler?.invoke(event) == true || super.dispatchKeyEvent(event)
 
@@ -78,6 +84,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (savedInstanceState == null) handleShortcutIntent(intent)
+        if (savedInstanceState == null && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
         setContent {
             val settingsVm: SettingsViewModel = hiltViewModel()
             val settings by settingsVm.settings.collectAsStateWithLifecycle()

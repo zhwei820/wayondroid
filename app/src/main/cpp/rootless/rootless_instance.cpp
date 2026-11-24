@@ -325,6 +325,10 @@ bool Instance::launch_services(std::string* error) {
     if (is_regular_file(lib + "libvine_sensors.so")) {
         sensors_pid_ = spawn({lib + "libvine_sensors.so", "--socket", "run/vine-sensors"}, W, layout_.logs + "/vine_sensors.log");
     }
+    // Optional: without it the guest's cameras show the HAL's test scene
+    if (is_regular_file(lib + "libvine_camera.so")) {
+        camera_pid_ = spawn({lib + "libvine_camera.so", "--socket", "run/vine-camera"}, W, layout_.logs + "/vine_camera.log");
+    }
     // Optional: without it the guest's RIL finds no modem and telephony no SIM
     if (is_regular_file(lib + "libvine_modem.so")) {
         // The IMEI follows the device seed, new on a reset
@@ -463,6 +467,7 @@ void Instance::poll() {
     }
     if (exited(pulse_pid_, nullptr)) pulse_pid_ = -1; // the guest goes on without sound
     if (exited(sensors_pid_, nullptr)) sensors_pid_ = -1; // and without sensor events
+    if (exited(camera_pid_, nullptr)) camera_pid_ = -1;   // or the phone's camera
     if (exited(modem_pid_, nullptr)) modem_pid_ = -1;       // or a SIM
     if (phase_ == Phase::Booting) {
         if (path_exists(layout_.run + "/boot_completed")) {
@@ -490,6 +495,7 @@ void Instance::teardown() {
     reap(wl_pid_, SIGTERM, 2000);
     reap(pulse_pid_, SIGTERM, 2000);
     reap(sensors_pid_, SIGTERM, 2000);
+    reap(camera_pid_, SIGTERM, 2000);
     reap(modem_pid_, SIGTERM, 2000);
     for (pid_t& p : detached_) reap(p, SIGKILL, 1000);
     detached_.clear();

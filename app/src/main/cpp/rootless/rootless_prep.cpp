@@ -671,6 +671,10 @@ bool install_camera_hal(const std::string& R, const std::string& lib_dir, bool* 
         for (const char* f = features; *f; f += strlen(f) + 1) xml += std::string("    <feature name=\"") + f + "\" />\n";
         if (!write_mode(V + "/etc/permissions/" + file, xml + "</permissions>\n", 0644, error)) return false;
     }
+    // camera_shim.c, under a Pixel 5 camera library's name, when there is one
+    const std::string shim = lib_dir + "/libvine_camera_shim.so";
+    const bool preload = is_regular_file(shim);
+    if (preload && !copy_mode(shim, V + "/lib64/libcamerapostproc.so", 0644, error)) return false;
     if (!write_mode(V + "/etc/vintf/manifest/android.hardware.camera.provider@2.7-service-google.xml",
                     "<manifest version=\"1.0\" type=\"device\">\n"
                     "    <hal format=\"aidl\">\n"
@@ -689,7 +693,8 @@ bool install_camera_hal(const std::string& R, const std::string& lib_dir, bool* 
                     "    class hal\n"
                     "    user system\n"
                     "    group system\n"
-                    "    capabilities SYS_NICE\n",
+                    "    capabilities SYS_NICE\n" +
+                        std::string(preload ? "    setenv LD_PRELOAD /vendor/lib64/libcamerapostproc.so\n" : ""),
                     0644, error))
         return false;
     *installed = true;

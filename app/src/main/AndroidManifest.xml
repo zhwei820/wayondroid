@@ -23,6 +23,9 @@
     <!-- Keeps CPU awake during boot of VM -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- The phone's camera as the rootless guest's (vine_camera) -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <!-- Required for vibration feedback in the UI -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
