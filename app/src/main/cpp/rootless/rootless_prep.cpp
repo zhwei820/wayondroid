@@ -9,6 +9,7 @@
 #include <cctype>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace vine::rootless {
@@ -688,9 +689,10 @@ bool remove_foreign_apps(const std::string& R, std::string* error) {
 
 // Files and directories that name Waydroid, LineageOS, the emulator or
 // the engine: tawcroot's <store>/app-hidden (tawcroot/include/app_hidden.h),
-// which apps see as absent. Kept visible: what app processes load or
-// read (framework jars and resources, installed apps and overlays, APEXes);
-// the marked libraries only services load.
+// which apps see as absent. Kept visible: installed apps, overlays and
+// APEXes. The marked libraries only services load; Lineage's framework
+// resources apps inherit mapped from zygote (tawcroot leaves the mapping
+// out of their /proc/self/maps).
 bool marked_name(const std::string& name) {
     std::string n = name;
     for (char& c : n) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
@@ -711,7 +713,7 @@ void collect_hidden(const std::string& R, const std::string& dir, int depth, std
         struct stat st {};
         if (lstat((R + path).c_str(), &st) != 0) continue;
         if (S_ISDIR(st.st_mode)) {
-            if (name == "app" || name == "priv-app" || name == "overlay" || name == "framework" || name == "apex") continue;
+            if (name == "app" || name == "priv-app" || name == "overlay" || name == "apex") continue;
             if (marked_name(name)) out->push_back(path);
             else if (depth < 6) collect_hidden(R, path, depth + 1, out);
         } else if (marked_name(name)) {
@@ -734,6 +736,43 @@ std::string app_hidden_list(const std::string& R) {
         }
     }
     return out;
+}
+
+// services.jar with LineageOS's packages hidden from the guest's apps, by
+// scripts/rootless/build-pm-patch.sh's patcher on the host's ART: once per
+// extracted jar, which <store>/services-patched records (size and mtime).
+// Without the patcher or ART, or on a jar it does not know, the guest boots
+// unpatched. The jar's odex no longer matches; ART runs it from the dex.
+bool patch_services_jar(const Layout& l, const std::string& lib_dir, std::string* error) {
+    const std::string patcher = lib_dir + "/libvine_pm_patch.so";
+    const char* const vm = "/apex/com.android.art/bin/dalvikvm64";
+    const std::string jar = l.rootfs + "/system/framework/services.jar", out = jar + ".vine";
+    const std::string stamp = l.store + "/services-patched";
+    const auto mark = [&jar]() {
+        struct stat st {};
+        return stat(jar.c_str(), &st) == 0 ? std::to_string(st.st_size) + " " + std::to_string(st.st_mtime) + "\n" : "";
+    };
+    if (!is_regular_file(patcher) || access(vm, X_OK) != 0 || mark().empty() || read_file(stamp).value_or("") == mark())
+        return true;
+    unlink(out.c_str());
+    const pid_t pid = fork();
+    if (pid == 0) {
+        execl(vm, vm, "-Xmx1g", "-cp", patcher.c_str(), "dev.vine.pmpatch.Main", jar.c_str(), out.c_str(),
+              static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    int st = 0;
+    if (pid < 0 || waitpid(pid, &st, 0) != pid) return fail_errno(error, "run the services.jar patcher");
+    const int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+    if (code == 0 && (chmod(out.c_str(), 0644) != 0 || rename(out.c_str(), jar.c_str()) != 0))
+        return fail_errno(error, "replace " + jar);
+    unlink(out.c_str());
+    // 2: already patched, or not a jar it knows; anything else is retried next boot
+    if (code != 0 && code != 2) {
+        fprintf(stderr, "services.jar patcher failed (status %d); the guest's apps see LineageOS's packages\n", code);
+        return true;
+    }
+    return write_mode(stamp, mark(), 0644, error);
 }
 
 // Properties that name LineageOS or Waydroid, in vendor_default_prop:
@@ -1236,7 +1275,8 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
     if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) ||
-        !write_mode(l.store + "/app-hidden", app_hidden_list(R), 0644, error))
+        !write_mode(l.store + "/app-hidden", app_hidden_list(R), 0644, error) ||
+        !patch_services_jar(l, o.lib_dir, error))
         return false;
     // scripts/radio/build-overlay.sh: EthernetTracker takes tawcroot's wlan0
     // and reports it as Wi-Fi, which is how a phone without a SIM is online.

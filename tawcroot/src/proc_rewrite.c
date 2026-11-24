@@ -17,6 +17,7 @@
  */
 
 #include <stddef.h>
+#include "app_hidden.h"
 #include "errno_neg.h"
 #include "io.h"
 #include "path_scratch.h"
@@ -250,7 +251,14 @@ long tawcroot_proc_maps_rewrite(
 		size_t plen = do_rewrite ? split_deleted_tag(p, path_len) : path_len;
 		long   rl   = do_rewrite ? tawcroot_proc_reverse_translate_path(
 			ctx, p, plen, xlated, TAWCROOT_PATH_SCRATCH_SIZE) : 0;
-		if (rl <= 0 && maps_line_hidden(p, path_len)) {
+		int hidden = rl <= 0 && maps_line_hidden(p, path_len);
+		/* An app sees no mapping of a file it cannot see (app_hidden.h),
+		 * such as what it inherited from zygote */
+		if (!hidden && rl > 0 && (size_t)rl < TAWCROOT_PATH_SCRATCH_SIZE) {
+			xlated[rl] = 0;
+			hidden = tawcroot_app_hidden(xlated);
+		}
+		if (hidden) {
 			i = has_nl ? line_end + 1 : line_end;
 			continue;
 		}

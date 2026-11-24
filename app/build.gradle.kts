@@ -114,6 +114,8 @@ android {
             // APKs (the guest's overlays) under library names, not ELFs to strip
             keepDebugSymbols += "**/libvine_telephony_overlay.so"
             keepDebugSymbols += "**/libvine_wifinet_overlay.so"
+            // A jar under a library name (scripts/rootless/build-pm-patch.sh)
+            keepDebugSymbols += "**/libvine_pm_patch.so"
         }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -217,3 +219,16 @@ val buildOverlays = tasks.register<Exec>("buildGuestOverlays") {
     }
 }
 tasks.named("preBuild") { dependsOn(buildOverlays) }
+
+// The guest's services.jar patcher (scripts/rootless/build-pm-patch.sh): without it apps see LineageOS's packages
+val buildPmPatch = tasks.register<Exec>("buildGuestPmPatch") {
+    workingDir = rootProject.projectDir
+    doFirst { environment("ANDROID_HOME", androidComponents.sdkComponents.sdkDirectory.get().asFile.path) }
+    commandLine("scripts/rootless/build-pm-patch.sh")
+    inputs.file(rootProject.file("scripts/rootless/build-pm-patch.sh"))
+    inputs.dir(rootProject.file("scripts/rootless/pmpatch"))
+    for (abi in listOf("arm64-v8a", "x86_64")) {
+        outputs.file("$projectDir/src/main/jniLibs/$abi/libvine_pm_patch.so")
+    }
+}
+tasks.named("preBuild") { dependsOn(buildPmPatch) }
