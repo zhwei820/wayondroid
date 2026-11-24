@@ -11,11 +11,17 @@
  * The camera runs, its frames copied into the memfd as I420, until the
  * guest closes the connection. One guest connection at a time; a new one
  * replaces the old. The phone only lets an app use its camera while the
- * app is in the foreground (and it holds CAMERA). */
+ * app is in the foreground (and it holds CAMERA).
+ *
+ * The camera service and the image reader's buffer queue call back over
+ * binder: without binder threads no frame arrives, the phone's camera
+ * pipeline stalls, and closing it hangs the phone's cameraserver until its
+ * watchdog kills it. */
 #include <camera/NdkCameraCaptureSession.h>
 #include <camera/NdkCameraDevice.h>
 #include <camera/NdkCameraManager.h>
 #include <camera/NdkCameraMetadata.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <media/NdkImage.h>
 #include <media/NdkImageReader.h>
@@ -313,6 +319,14 @@ int main(int argc, char** argv)
         return 2;
     }
     signal(SIGPIPE, SIG_IGN);
+    /* libbinder_ndk's (API 29), looked up: the app's minSdk is lower */
+    void* binder = dlopen("libbinder_ndk.so", RTLD_NOW);
+    void (*start_pool)(void) = binder ? (void (*)(void))dlsym(binder, "ABinderProcess_startThreadPool") : NULL;
+    if (!start_pool) {
+        logmsg("no binder thread pool");
+        return 1;
+    }
+    start_pool();
     g.manager = ACameraManager_create();
     if (!g.manager) {
         logmsg("no camera manager");

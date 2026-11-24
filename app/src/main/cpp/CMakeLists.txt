@@ -116,7 +116,7 @@ target_link_options(vine_sensors PRIVATE -pie -Wl,-z,max-page-size=16384)
 
 # Rootless guest camera: the phone's camera frames for the guest's camera HAL
 add_executable(vine_camera camera/vine_camera.c)
-target_link_libraries(vine_camera PRIVATE camera2ndk mediandk ${android-lib})
+target_link_libraries(vine_camera PRIVATE camera2ndk mediandk ${android-lib} dl)
 target_link_options(vine_camera PRIVATE -pie -Wl,-z,max-page-size=16384)
 
 # Rootless guest SIM: answers the AT commands of the guest's RIL with the phone's carrier
