@@ -6,14 +6,16 @@ import android.net.wifi.WifiManager;
 
 import com.android.server.VineWifiInfo;
 
+import java.util.List;
 import java.util.function.Supplier;
 
 /**
  * Added to the guest's service-wifi.jar by dev.vine.pmpatch.Main, which
- * points two calls of WifiServiceImpl here. The guest has no Wi-Fi radio;
+ * points three calls of WifiServiceImpl here. The guest has no Wi-Fi radio;
  * it is online through tawcroot's wlan0, which the framework already counts
  * as a Wi-Fi network. Apps asking WifiManager see that network: Wi-Fi on,
- * connected to VineWifiInfo's access point. WifiServiceImpl still redacts
+ * connected to VineWifiInfo's access point, which scans find with its
+ * neighbours. WifiServiceImpl still redacts
  * what a caller may not see (the SSID without location permission, as on
  * any phone).
  */
@@ -26,13 +28,19 @@ public final class VineWifi {
         return state == WifiManager.WIFI_STATE_DISABLED && VineWifiInfo.wlan0() != null ? WifiManager.WIFI_STATE_ENABLED : state;
     }
 
-    /** WifiServiceImpl.getConnectionInfo's WifiThreadRunner.call(supplier, new WifiInfo()) */
+    /**
+     * WifiServiceImpl's WifiThreadRunner.call(supplier, default) in
+     * getConnectionInfo (a WifiInfo) and getScanResults (a list), after
+     * their permission checks
+     */
     public static Object call(WifiThreadRunner runner, Supplier<Object> supplier, Object onTimeout) {
-        Object info = runner.call(supplier, onTimeout);
-        if (info instanceof WifiInfo && ((WifiInfo) info).getSupplicantState() != SupplicantState.COMPLETED) {
+        Object result = runner.call(supplier, onTimeout);
+        if (result instanceof WifiInfo && ((WifiInfo) result).getSupplicantState() != SupplicantState.COMPLETED) {
             WifiInfo fake = VineWifiInfo.fake();
             if (fake != null) return fake;
+        } else if (result instanceof List && ((List<?>) result).isEmpty() && VineWifiInfo.wlan0() != null) {
+            return VineWifiInfo.scan();
         }
-        return info;
+        return result;
     }
 }

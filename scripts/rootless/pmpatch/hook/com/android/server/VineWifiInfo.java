@@ -1,14 +1,19 @@
 package com.android.server;
 
+import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiInfo;
+import android.os.SystemClock;
 
 import java.lang.reflect.Method;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.Random;
 
 /**
  * The access point the guest's hooks (VineWifi, VineEthernet) report it is
@@ -32,17 +37,33 @@ public final class VineWifiInfo {
         return null;
     }
 
+    /** wlan0's MAC hashed, the seed of every name here; 0 without wlan0 */
+    static int seed(NetworkInterface nif) throws Exception {
+        byte[] mac = nif == null ? null : nif.getHardwareAddress();
+        if (mac == null || mac.length != 6) return 0;
+        int h = 0;
+        for (byte b : mac) h = h * 31 + (b & 0xff);
+        return h == 0 ? 1 : h;
+    }
+
+    static String ssid(int h) {
+        return String.format("Xiaomi_%04X", h & 0xffff);
+    }
+
+    /** The 5 GHz radio's; the 2.4 GHz one's ends one lower */
+    static String bssid(int h) {
+        return String.format("64:09:80:%02x:%02x:%02x", (h >>> 16) & 0xff, (h >>> 8) & 0xff, h & 0xff);
+    }
+
     /** A connected WifiInfo, or null without wlan0 */
     public static WifiInfo fake() {
         NetworkInterface nif = wlan0();
         if (nif == null) return null;
         try {
+            int h = seed(nif);
+            if (h == 0) return null;
             byte[] mac = nif.getHardwareAddress();
-            if (mac == null || mac.length != 6) return null;
-            int h = 0;
-            for (byte b : mac) h = h * 31 + (b & 0xff);
-            String ssid = String.format("Xiaomi_%04X", h & 0xffff);
-            String bssid = String.format("64:09:80:%02x:%02x:%02x", (h >>> 16) & 0xff, (h >>> 8) & 0xff, h & 0xff);
+            String ssid = ssid(h), bssid = bssid(h);
             WifiInfo info = new WifiInfo.Builder()
                     .setSsid(ssid.getBytes(StandardCharsets.UTF_8))
                     .setBssid(bssid)
@@ -70,6 +91,61 @@ public final class VineWifiInfo {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * A scan: the access point's two radios and the neighbours' (names a
+     * Chinese apartment block shows), the same for an instance's life; empty
+     * without wlan0
+     */
+    public static List<ScanResult> scan() {
+        List<ScanResult> out = new ArrayList<>();
+        try {
+            int h = seed(wlan0());
+            if (h == 0) return out;
+            Random r = new Random(h);
+            String b5 = bssid(h);
+            String b24 = b5.substring(0, 15) + String.format("%02x", (Integer.parseInt(b5.substring(15), 16) + 255) & 0xff);
+            out.add(result(ssid(h), b5, -52, 5180, ScanResult.CHANNEL_WIDTH_80MHZ, 5210));
+            out.add(result(ssid(h), b24, -47, 2437, ScanResult.CHANNEL_WIDTH_20MHZ, 0));
+            String[][] neighbours = {
+                {"ChinaNet-%04X", "d0:60:8c"}, {"CMCC-%04X", "f4:2e:7f"}, {"TP-LINK_%04X", "50:3e:aa"},
+                {"HUAWEI-%04X", "e0:24:7f"}, {"ChinaUnicom-%04X", "c8:3a:35"},
+            };
+            int[] channels = {2412, 2437, 2462, 2422, 2452};
+            for (int i = 0; i < neighbours.length; i++) {
+                if (r.nextInt(5) == 0) continue;
+                String bssid = String.format("%s:%02x:%02x:%02x", neighbours[i][1], r.nextInt(256), r.nextInt(256),
+                        r.nextInt(256));
+                out.add(result(String.format(neighbours[i][0], r.nextInt(0x10000)), bssid, -68 - r.nextInt(22),
+                        channels[r.nextInt(channels.length)], ScanResult.CHANNEL_WIDTH_20MHZ, 0));
+            }
+        } catch (Exception e) {
+            // as far as it got
+        }
+        return out;
+    }
+
+    static ScanResult result(String ssid, String bssid, int level, int frequency, int width, int center) {
+        ScanResult s = new ScanResult();
+        s.SSID = ssid;
+        s.BSSID = bssid;
+        s.capabilities = "[WPA2-PSK-CCMP][RSN-PSK-CCMP][ESS][WPS]";
+        s.level = level;
+        s.frequency = frequency;
+        s.channelWidth = width;
+        s.centerFreq0 = center;
+        s.timestamp = SystemClock.elapsedRealtime() * 1000;
+        try {
+            Class<?> ws = Class.forName("android.net.wifi.WifiSsid");
+            Object w = ws.getMethod("fromBytes", byte[].class).invoke(null, (Object) ssid.getBytes(StandardCharsets.UTF_8));
+            Method m = ScanResult.class.getDeclaredMethod("setWifiSsid", ws);
+            m.setAccessible(true);
+            m.invoke(s, w);
+        } catch (Exception e) {
+            // SSID alone
+        }
+        return s;
     }
 
     static void set(WifiInfo info, String name, Class<?> type, Object value) {

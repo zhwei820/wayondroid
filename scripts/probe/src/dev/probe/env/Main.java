@@ -119,6 +119,8 @@ public class Main extends Activity {
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         NetworkInfo ni = cm.getActiveNetworkInfo();
         put("net.info", ni == null ? null : ni.getType() + " " + ni.getTypeName() + " " + ni.getState());
+        android.net.NetworkCapabilities ac = cm.getNetworkCapabilities(cm.getActiveNetwork());
+        put("net.caps", ac == null ? null : "transportInfo=" + ac.getTransportInfo() + " specifier=" + ac.getNetworkSpecifier());
         Network n = cm.getActiveNetwork();
         NetworkCapabilities nc = n == null ? null : cm.getNetworkCapabilities(n);
         put("net.wifi", nc != null && nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI));
@@ -133,6 +135,13 @@ public class Main extends Activity {
         put("wifi.enabled", wm.isWifiEnabled());
         android.net.wifi.WifiInfo wi = wm.getConnectionInfo();
         put("wifi.ssid", wi.getSSID());
+        StringBuilder scan = new StringBuilder();
+        try {
+            for (android.net.wifi.ScanResult r : wm.getScanResults()) scan.append(r.SSID).append('/').append(r.level).append(' ');
+        } catch (Exception e) {
+            scan.append(e);
+        }
+        put("wifi.scan", scan);
         put("wifi.info", wi.getBSSID() + " rssi=" + wi.getRssi() + " " + wi.getLinkSpeed() + "Mbps " + wi.getFrequency()
                 + "MHz std=" + wi.getWifiStandard() + " id=" + wi.getNetworkId() + " " + wi.getSupplicantState()
                 + " ip=" + wi.getIpAddress() + " mac=" + wi.getMacAddress());

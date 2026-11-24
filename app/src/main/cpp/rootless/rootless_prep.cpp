@@ -741,33 +741,45 @@ std::string app_hidden_list(const std::string& R) {
 
 // The guest's jars that scripts/rootless/pmpatch patches (Main.java says
 // how), on the host's ART: services.jar, so that apps do not see LineageOS's
-// packages, service-connectivity.jar, so that the network is named Wi-Fi,
-// and service-wifi.jar, so that WifiManager reports that network. Once per
-// extracted jar, which <store>/patched-<name> records (size
-// and mtime). Without the patcher or ART, or on a jar it does not know, the
-// guest boots unpatched. A patched jar's odex no longer matches; ART runs it
-// from the dex.
+// packages, service-connectivity.jar, so that the network is a Wi-Fi
+// network, and service-wifi.jar, so that WifiManager reports it. The jar as
+// extracted is kept as <store>/original-<name> and patched from there, so a
+// new patcher replaces the old one's work; <store>/patched-<name> records
+// which jar (size and mtime) and patcher (a hash: libraries an APK installs
+// all have the same mtime) the jar in the rootfs comes from.
+// Without the patcher or ART, or on a jar it does not know, the guest boots
+// it unpatched. A patched jar's odex no longer matches; ART runs the dex.
 const char* const kPatchedJars[] = {
     "/system/framework/services.jar",
     "/system/apex/com.android.tethering/javalib/service-connectivity.jar",
     "/system/apex/com.android.wifi/javalib/service-wifi.jar",
 };
 
+std::string stat_mark(const std::string& path) {
+    struct stat st {};
+    return stat(path.c_str(), &st) == 0 ? std::to_string(st.st_size) + " " + std::to_string(st.st_mtime) : "";
+}
+
 bool patch_guest_jar(const Layout& l, const std::string& lib_dir, const std::string& path, std::string* error) {
     const std::string patcher = lib_dir + "/libvine_pm_patch.so";
     const char* const vm = "/apex/com.android.art/bin/dalvikvm64";
+    const std::string name = path.substr(path.rfind('/') + 1);
     const std::string jar = l.rootfs + path, out = jar + ".vine";
-    const std::string stamp = l.store + "/patched-" + path.substr(path.rfind('/') + 1);
-    const auto mark = [&jar]() {
-        struct stat st {};
-        return stat(jar.c_str(), &st) == 0 ? std::to_string(st.st_size) + " " + std::to_string(st.st_mtime) + "\n" : "";
-    };
-    if (!is_regular_file(patcher) || access(vm, X_OK) != 0 || mark().empty() || read_file(stamp).value_or("") == mark())
-        return true;
+    const std::string stamp = l.store + "/patched-" + name, original = l.store + "/original-" + name;
+    if (!is_regular_file(patcher) || access(vm, X_OK) != 0 || stat_mark(jar).empty()) return true;
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (unsigned char c : read_file(patcher).value_or("")) h = (h ^ c) * 0x100000001b3ull;
+    const std::string patcher_hash = std::to_string(h);
+    const auto mark = [&]() { return stat_mark(jar) + " " + patcher_hash + "\n"; };
+    if (read_file(stamp).value_or("") == mark()) return true;
+    // No stamp: the jar is as extracted. A stamp without the original is an
+    // earlier engine's, which patched in place: the patcher takes its jar.
+    if (!is_regular_file(original) && !is_regular_file(stamp) && !copy_mode(jar, original, 0644, error)) return false;
+    const std::string from = is_regular_file(original) ? original : jar;
     unlink(out.c_str());
     const pid_t pid = fork();
     if (pid == 0) {
-        execl(vm, vm, "-Xmx1g", "-cp", patcher.c_str(), "dev.vine.pmpatch.Main", jar.c_str(), out.c_str(),
+        execl(vm, vm, "-Xmx1g", "-cp", patcher.c_str(), "dev.vine.pmpatch.Main", from.c_str(), out.c_str(),
               static_cast<char*>(nullptr));
         _exit(127);
     }
