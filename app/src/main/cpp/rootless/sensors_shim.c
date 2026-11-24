@@ -161,11 +161,14 @@ static void set_str(struct hstr* h, const char* text)
     h->owns = false; /* the old buffer leaks: the table lives as long as the process */
 }
 
+static char subhal_path[256];
+
 static int find_table(struct dl_phdr_info* info, size_t size, void* out)
 {
     (void)size;
     const size_t n = info->dlpi_name ? strlen(info->dlpi_name) : 0;
     if (n < sizeof kSubHal - 1 || strcmp(info->dlpi_name + n - (sizeof kSubHal - 1), kSubHal)) return 0;
+    snprintf(subhal_path, sizeof subhal_path, "%s", info->dlpi_name);
     for (int p = 0; p < info->dlpi_phnum; p++) {
         const ElfW(Phdr)* ph = &info->dlpi_phdr[p];
         if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_W)) continue;
@@ -222,16 +225,31 @@ static void patch_table(void)
 
 typedef void (*post_fn)(void*, const struct event*);
 
+#define POST_SENSOR_EVENT _ZN8goldfish15MultihalSensors15postSensorEventERKN7android8hardware7sensors4V2_15EventE
+#define STR2(x) #x
+#define STR(x) STR2(x)
+EXPORT void POST_SENSOR_EVENT(void* self, const struct event* e);
+
+/* The sub-HAL is dlopen()ed after this preload, outside its search scope:
+ * RTLD_NEXT finds nothing, so look in the sub-HAL itself */
+static post_fn real_post(void)
+{
+    static post_fn real;
+    if (real) return real;
+    post_fn fn = NULL;
+    void* h = subhal_path[0] ? dlopen(subhal_path, RTLD_NOW | RTLD_NOLOAD) : NULL;
+    if (h) fn = (post_fn)dlsym(h, STR(POST_SENSOR_EVENT));
+    if (!fn) fn = (post_fn)dlsym(RTLD_NEXT, STR(POST_SENSOR_EVENT));
+    if (fn == POST_SENSOR_EVENT) fn = NULL;
+    return real = fn;
+}
+
 /* vine_sensors sends hinge angles: the step count, and for the detector
  * and significant motion a value that changes on each event (the sub-HAL
  * posts a hinge angle only when it changes) */
-EXPORT void _ZN8goldfish15MultihalSensors15postSensorEventERKN7android8hardware7sensors4V2_15EventE(
-    void* self, const struct event* e)
+EXPORT void POST_SENSOR_EVENT(void* self, const struct event* e)
 {
-    static post_fn real;
-    if (!real)
-        real = (post_fn)dlsym(RTLD_NEXT,
-                              "_ZN8goldfish15MultihalSensors15postSensorEventERKN7android8hardware7sensors4V2_15EventE");
+    const post_fn real = real_post();
     if (!real) return;
     if (e->type != kTypeHinge || e->handle < kHinge0 || e->handle > kHinge2) {
         real(self, e);
