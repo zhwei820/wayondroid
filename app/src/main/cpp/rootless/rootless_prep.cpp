@@ -700,8 +700,10 @@ bool remove_foreign_apps(const std::string& R, std::string* error) {
 bool marked_name(const std::string& name) {
     std::string n = name;
     for (char& c : n) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    // minigbm/gbm_mesa: Waydroid's gralloc 4, unused (gralloc.redfin is
+    // gralloc 2); hidden, apps' libui finds no mapper 4 and takes gralloc 2's
     for (const char* m : {"waydroid", "lineage", "vine", "goldfish", "ranchu", "cuttlefish", "gfxstream", "anbox", "qemu",
-                          "virtio", "reference-ril"}) {
+                          "virtio", "reference-ril", "minigbm", "gbm_mesa"}) {
         if (n.find(m) != std::string::npos) return true;
     }
     return false;
