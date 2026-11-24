@@ -42,7 +42,8 @@ public class Main extends Activity {
     void put(String k, Object v) {
         String s = String.valueOf(v);
         out.append(k).append('=').append(s.replace('\n', '|'));
-        if (MARK.matcher(s).find()) out.append("    <<MARK");
+        // the key too for packages: the name is the key
+        if (MARK.matcher(s).find() || (k.startsWith("pkg.") && MARK.matcher(k).find())) out.append("    <<MARK");
         out.append('\n');
     }
 
@@ -218,6 +219,8 @@ public class Main extends Activity {
         put("proc.cpuinfo.hardware", grep(read("/proc/cpuinfo", 400), "Hardware|CPU part"));
         String mounts = read("/proc/self/mounts", 2000);
         put("proc.mounts.lines", mounts.split("\n").length);
+        // run.sh drops output lines naming linkerconfig (its exec channel's noise)
+        put("proc.mounts.all", mounts.replace("linkerconfig", "linker_config"));
         int i = 0;
         for (String l : mounts.split("\n")) {
             if (MARK.matcher(l).find() || l.contains(" /my_") || l.contains(getPackageName())) put("proc.mounts." + i++, l);
@@ -300,6 +303,72 @@ public class Main extends Activity {
             put("camera.ids", String.join(",", cm.getCameraIdList()));
         } catch (Exception e) { put("camera.ids", "ERR " + e); }
         for (String camId : new String[] {"0", "1"}) put("camera.capture." + camId, capture(camId));
+        try {
+            android.hardware.camera2.CameraManager cm2 = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
+            for (String camId : cm2.getCameraIdList()) {
+                android.hardware.camera2.CameraCharacteristics cc = cm2.getCameraCharacteristics(camId);
+                android.hardware.camera2.params.StreamConfigurationMap map =
+                        cc.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+                android.util.Size[] jpeg = map == null ? null : map.getOutputSizes(android.graphics.ImageFormat.JPEG);
+                put("camera.chars." + camId, "facing=" + cc.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+                        + " level=" + cc.get(android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+                        + " pixelArray=" + cc.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+                        + " physical=" + cc.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                        + " focal=" + java.util.Arrays.toString(cc.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS))
+                        + " orientation=" + cc.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION)
+                        + " caps=" + java.util.Arrays.toString(cc.get(android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES))
+                        + " maxJpeg=" + (jpeg == null || jpeg.length == 0 ? "none" : jpeg[0])
+                        + " physicalIds=" + cc.getPhysicalCameraIds());
+            }
+        } catch (Exception e) { put("camera.chars", "ERR " + e); }
+        StringBuilder modes = new StringBuilder();
+        for (android.view.Display.Mode m : getWindowManager().getDefaultDisplay().getSupportedModes())
+            modes.append(m.getPhysicalWidth()).append('x').append(m.getPhysicalHeight()).append('@').append(m.getRefreshRate()).append(' ');
+        put("display.modes", modes);
+        TelephonyManager tmx = getSystemService(TelephonyManager.class);
+        try { put("tel.modems", "supported=" + tmx.getSupportedModemCount() + " active=" + tmx.getActiveModemCount()); }
+        catch (Exception e) { put("tel.modems", "ERR " + e); }
+        // With FLAG_INCLUDE_LOCATION_INFO the network's WifiInfo is the one getConnectionInfo gives an app
+        // with location access; without it, redacted (see net.caps)
+        try {
+            android.net.ConnectivityManager cmx = getSystemService(android.net.ConnectivityManager.class);
+            final String[] got = {"none"};
+            final java.util.concurrent.CountDownLatch l = new java.util.concurrent.CountDownLatch(1);
+            android.net.ConnectivityManager.NetworkCallback cb = new android.net.ConnectivityManager.NetworkCallback(
+                    android.net.ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                @Override public void onCapabilitiesChanged(android.net.Network n, android.net.NetworkCapabilities c) {
+                    Object ti = c.getTransportInfo();
+                    if (ti instanceof android.net.wifi.WifiInfo) {
+                        android.net.wifi.WifiInfo wi = (android.net.wifi.WifiInfo) ti;
+                        got[0] = wi.getSSID() + " " + wi.getBSSID() + " id=" + wi.getNetworkId();
+                    }
+                    l.countDown();
+                }
+            };
+            cmx.registerDefaultNetworkCallback(cb);
+            l.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            cmx.unregisterNetworkCallback(cb);
+            put("net.caps.withLocation", got[0]);
+        } catch (Exception e) { put("net.caps.withLocation", "ERR " + e); }
+        try {
+            SensorManager smx = getSystemService(SensorManager.class);
+            Sensor p = smx.getDefaultSensor(Sensor.TYPE_PRESSURE);
+            final float[] v = {Float.NaN};
+            final java.util.concurrent.CountDownLatch l = new java.util.concurrent.CountDownLatch(1);
+            android.hardware.SensorEventListener sl = new android.hardware.SensorEventListener() {
+                @Override public void onSensorChanged(android.hardware.SensorEvent e) { v[0] = e.values[0]; l.countDown(); }
+                @Override public void onAccuracyChanged(Sensor s, int a) {}
+            };
+            if (p != null) {
+                android.os.HandlerThread sh = new android.os.HandlerThread("baro");
+                sh.start();
+                smx.registerListener(sl, p, SensorManager.SENSOR_DELAY_NORMAL, new android.os.Handler(sh.getLooper()));
+                l.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                smx.unregisterListener(sl);
+                sh.quitSafely();
+            }
+            put("sensor.pressure", p == null ? "none" : p.getName() + " | " + p.getVendor() + " = " + v[0] + " hPa");
+        } catch (Exception e) { put("sensor.pressure", "ERR " + e); }
         StringBuilder feat = new StringBuilder();
         for (android.content.pm.FeatureInfo fi : getPackageManager().getSystemAvailableFeatures())
             if (fi.name != null && fi.name.matches(".*(camera|bluetooth|nfc|fingerprint).*")) feat.append(fi.name).append(' ');

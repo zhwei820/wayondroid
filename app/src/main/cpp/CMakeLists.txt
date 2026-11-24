@@ -111,7 +111,7 @@ target_link_options(vine_pulse PRIVATE -pie -static-libstdc++ -Wl,-z,max-page-si
 
 # Rootless guest sensors: the phone's sensors for the guest's goldfish sensors HAL
 add_executable(vine_sensors sensors/vine_sensors.c)
-target_link_libraries(vine_sensors PRIVATE ${android-lib})
+target_link_libraries(vine_sensors PRIVATE ${android-lib} m)
 target_link_options(vine_sensors PRIVATE -pie -Wl,-z,max-page-size=16384)
 
 # Rootless guest SIM: answers the AT commands of the guest's RIL with the phone's carrier

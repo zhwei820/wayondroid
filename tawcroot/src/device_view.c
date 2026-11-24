@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <asm/unistd.h>
 #include "device_view.h"
 #include "app_hidden.h"
@@ -448,4 +449,169 @@ long tawcroot_device_sysinfo(const tawcroot_syscall_args *a, ucontext_t *uc)
 		si.bufferram = (si.bufferram * k) >> FIX;
 	}
 	return tawc_copy_to_guest((void *)(uintptr_t)a->a, &si, sizeof si) < 0 ? TAWC_EFAULT : 0;
+}
+
+/* ---- mounts ---- */
+
+#define MOUNTS_MAX (128 * 1024)
+
+static long put_text(int out, const char *t, size_t n)
+{
+	while (n) {
+		long w = tawc_write(out, t, n);
+		if (w <= 0) return w < 0 ? w : TAWC_EIO;
+		t += w;
+		n -= (size_t)w;
+	}
+	return 0;
+}
+
+/* Field `i` (0-based, space-separated) of a mounts line [p, e) */
+static void field(const char *p, const char *e, int i, const char **f, size_t *n)
+{
+	for (; i > 0 && p < e; --i) {
+		while (p < e && *p != ' ') p++;
+		while (p < e && *p == ' ') p++;
+	}
+	const char *q = p;
+	while (q < e && *q != ' ') q++;
+	*f = p;
+	*n = (size_t)(q - p);
+}
+
+static int under_mount(const char *mnt, size_t mn, const char *path, size_t pn)
+{
+	if (mn == 1 && mnt[0] == '/') return pn > 1;
+	if (pn <= mn) return 0;
+	for (size_t i = 0; i < mn; i++)
+		if (mnt[i] != path[i]) return 0;
+	return path[mn] == '/';
+}
+
+/* A mounts-format line as mountinfo: ids from 1500 on, the parent the
+ * nearest earlier mount above it, a device number from its source */
+static long put_info(int out, const char *buf, const char *limit, const char *p, const char *e, int id, unsigned *anon)
+{
+	const char *src, *mnt, *type, *opts;
+	size_t ns, nm, nt, no;
+	field(p, e, 0, &src, &ns);
+	field(p, e, 1, &mnt, &nm);
+	field(p, e, 2, &type, &nt);
+	field(p, e, 3, &opts, &no);
+	int parent = id - 1;
+	size_t best = 0;
+	int k = 1500;
+	for (const char *q = buf; q < limit && *q; k++) {
+		const char *qe = q;
+		while (*qe && *qe != '\n') qe++;
+		const char *qm;
+		size_t qn;
+		field(q, qe, 1, &qm, &qn);
+		if (qn > best && under_mount(qm, qn, mnt, nm)) { best = qn; parent = k; }
+		q = *qe ? qe + 1 : qe;
+	}
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	char *line = scratch->buf[3];
+	const size_t cap = TAWCROOT_PATH_SCRATCH_SIZE;
+	size_t n = 0;
+	long major = 0, minor = 0;
+	if (ns > 14 && tawc_starts_with(src, "/dev/block/dm-")) { major = 253; minor = (long)parse_ul(src + 14); }
+	else if (ns > 15 && tawc_starts_with(src, "/dev/block/sda")) { major = 8; minor = (long)parse_ul(src + 14); }
+	else minor = (long)(*anon)++;
+	long er = tawc_str_append_dec(line, cap, &n, id);
+	if (!er) er = tawc_str_append(line, cap, &n, " ");
+	if (!er) er = tawc_str_append_dec(line, cap, &n, parent);
+	if (!er) er = tawc_str_append(line, cap, &n, " ");
+	if (!er) er = tawc_str_append_dec(line, cap, &n, major);
+	if (!er) er = tawc_str_append(line, cap, &n, ":");
+	if (!er) er = tawc_str_append_dec(line, cap, &n, minor);
+	if (!er) er = tawc_str_append(line, cap, &n, " / ");
+	if (er || n + nm + nt + ns + 2 * no + 16 >= cap) return 0;
+	for (size_t i = 0; i < nm; i++) line[n++] = mnt[i];
+	line[n++] = ' ';
+	/* per-mount options: the template's, up to the first fs-specific one */
+	size_t cut = 0;
+	while (cut < no && !(opts[cut] == ',' && (tawc_starts_with(opts + cut + 1, "seclabel") ||
+						   tawc_starts_with(opts + cut + 1, "size=") ||
+						   tawc_starts_with(opts + cut + 1, "lazytime")))) cut++;
+	for (size_t i = 0; i < cut; i++) line[n++] = opts[i];
+	line[n++] = ' '; line[n++] = '-'; line[n++] = ' ';
+	for (size_t i = 0; i < nt; i++) line[n++] = type[i];
+	line[n++] = ' ';
+	for (size_t i = 0; i < ns; i++) line[n++] = src[i];
+	line[n++] = ' ';
+	for (size_t i = 0; i < no; i++) line[n++] = opts[i];
+	line[n++] = '\n';
+	return put_text(out, line, n);
+}
+
+/* The app's own mounts (its profile binds), as the template's /data */
+static long put_own(int out, int info, const char *buf, int *id, unsigned *anon)
+{
+	const char *data = 0, *de = 0;
+	for (const char *q = buf; *q;) {
+		const char *qe = q;
+		while (*qe && *qe != '\n') qe++;
+		const char *m;
+		size_t n;
+		field(q, qe, 1, &m, &n);
+		if (n == 5 && tawc_starts_with(m, "/data ")) { data = q; de = qe; }
+		q = *qe ? qe + 1 : qe;
+	}
+	if (!data) return 0;
+	const char *src, *mnt, *rest;
+	size_t ns, nm, nr;
+	field(data, de, 0, &src, &ns);
+	field(data, de, 1, &mnt, &nm);
+	rest = mnt + nm;
+	nr = (size_t)(de - rest);
+	size_t nb = __atomic_load_n(&tawcroot_n_binds, __ATOMIC_ACQUIRE);
+	for (size_t i = 0; i < nb; ++i) {
+		const struct tawcroot_bind *b = &tawcroot_binds[i];
+		/* dst has no leading slash */
+		if (!b->active || !tawc_starts_with(b->dst, "data/misc/profiles/")) continue;
+		TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+		char *line = scratch->buf[2];
+		size_t n = 0;
+		if (ns + b->dst_len + nr + 5 >= TAWCROOT_PATH_SCRATCH_SIZE) continue;
+		for (size_t k = 0; k < ns; k++) line[n++] = src[k];
+		line[n++] = ' ';
+		line[n++] = '/';
+		for (size_t k = 0; k < b->dst_len; k++) line[n++] = b->dst[k];
+		for (size_t k = 0; k < nr; k++) line[n++] = rest[k];
+		line[n++] = '\n';
+		line[n] = 0;
+		long e = info ? put_info(out, buf, buf + tawc_strlen(buf), line, line + n - 1, (*id)++, anon)
+			      : put_text(out, line, n);
+		if (e) return e;
+	}
+	return 0;
+}
+
+long tawcroot_device_mounts(int out, int info)
+{
+	if (!tawcroot_guest_is_app() || !has_device()) return TAWC_ENOSYS;
+	long region = tawc_mmap(0, MOUNTS_MAX, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (region < 0 && region >= -4095) return TAWC_ENOSYS;
+	char *buf = (char *)(uintptr_t)region;
+	long n = read_device("mounts", buf, MOUNTS_MAX);
+	long e = TAWC_ENOSYS;
+	if (n > 0) {
+		e = 0;
+		int id = 1500;
+		unsigned anon = 20;
+		if (!info) {
+			e = put_text(out, buf, (size_t)n);
+		} else {
+			for (const char *p = buf; !e && *p; id++) {
+				const char *pe = p;
+				while (*pe && *pe != '\n') pe++;
+				e = put_info(out, buf, p, p, pe, id, &anon);
+				p = *pe ? pe + 1 : pe;
+			}
+		}
+		if (!e) e = put_own(out, info, buf, &id, &anon);
+	}
+	(void)tawc_munmap(buf, MOUNTS_MAX);
+	return e;
 }

@@ -289,9 +289,16 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
 // zygote must not preload the
 // driver, or its kumquat socket leaks into every fork and zygote's fd
 // check aborts.
-std::string waydroid_prop(int dpi, bool gpu) {
+// libEGL finds its driver by ro.hardware.egl, and only for "angle" does it
+// load the driver as ANGLE (its platform first; anything else crashes in
+// ANGLE's eglGetProcAddress). The image's libEGL reads this property
+// instead (kEglStrings), so ro.hardware.egl can name a Pixel's driver.
+constexpr const char* kEglDriverProp = "ro.egl.hal.impl";
+
+std::string waydroid_prop(int dpi, bool gpu, bool egl_renamed) {
     return std::string(gpu ? "" : "ro.hardware.gralloc=default\n") +
-           "ro.hardware.egl=angle\n" +
+           (egl_renamed ? "ro.hardware.egl=adreno\n" + std::string(kEglDriverProp) + "=angle\n"
+                        : std::string("ro.hardware.egl=angle\n")) +
            (gpu ? "ro.hardware.vulkan=adreno\nro.vendor.display.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
            "sys.use_memfd=true\n"
            // Codec2 takes linear buffers from DMA-BUF heaps, which apps
@@ -851,7 +858,79 @@ bool install_gles_shim(const std::string& R, const std::string& lib_dir, std::st
 // of the Pixel 5's SoC, kernel, RAM and storage instead of the phone's.
 // Unverified on a device: the Kryo 475 silver cores' variant, the kernel's
 // build strings, MemTotal and the userdata size (a 128 GB model's).
-bool write_device_view(const std::string& store, std::string* error) {
+// An app's /proc/self/mounts on a Pixel 5 (Android 13, ext4 dynamic
+// partitions, f2fs userdata, FUSE storage), tawcroot's template for apps'
+// mounts and mountinfo, with each APEX the image has mounted twice (by name
+// and name@version) as apexd does. Block device numbers and sizes are made
+// up, unverified on a device; tawcroot adds the app's own profile mounts.
+std::string device_mounts(const std::string& R) {
+    const std::string data_opts =
+        "rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,"
+        "inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,"
+        "resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0\n";
+    const std::string tmp = "rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755";
+    std::string m =
+        "/dev/block/dm-6 / ext4 ro,seclabel,relatime 0 0\n"
+        "tmpfs /dev tmpfs rw,seclabel,nosuid,relatime,size=3806154k,nr_inodes=951538,mode=755 0 0\n"
+        "devpts /dev/pts devpts rw,seclabel,relatime,mode=600,ptmxmode=000 0 0\n"
+        "proc /proc proc rw,relatime,gid=3009,hidepid=invisible 0 0\n"
+        "sysfs /sys sysfs rw,seclabel,relatime 0 0\n"
+        "selinuxfs /sys/fs/selinux selinuxfs rw,relatime 0 0\n"
+        "tmpfs /mnt " + tmp + ",gid=1000 0 0\n"
+        "tmpfs /mnt/installer " + tmp + ",gid=1000 0 0\n"
+        "tmpfs /mnt/androidwritable " + tmp + ",gid=1000 0 0\n"
+        "/dev/block/dm-7 /system_ext ext4 ro,seclabel,relatime 0 0\n"
+        "/dev/block/dm-8 /vendor ext4 ro,seclabel,relatime 0 0\n"
+        "/dev/block/dm-9 /product ext4 ro,seclabel,relatime 0 0\n"
+        "/dev/block/dm-10 /vendor_dlkm ext4 ro,seclabel,relatime 0 0\n"
+        "tmpfs /apex " + tmp + " 0 0\n"
+        "tmpfs /linkerconfig " + tmp + " 0 0\n"
+        "none /dev/blkio cgroup rw,nosuid,nodev,noexec,relatime,blkio 0 0\n"
+        "none /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime,memory_recursiveprot 0 0\n"
+        "none /dev/cpuctl cgroup rw,nosuid,nodev,noexec,relatime,cpu 0 0\n"
+        "none /dev/cpuset cgroup rw,nosuid,nodev,noexec,relatime,cpuset,noprefix,release_agent=/sbin/cpuset_release_agent 0 0\n"
+        "none /dev/memcg cgroup rw,nosuid,nodev,noexec,relatime,memory 0 0\n"
+        "none /dev/stune cgroup rw,nosuid,nodev,noexec,relatime,schedtune 0 0\n"
+        "tracefs /sys/kernel/tracing tracefs rw,seclabel,relatime,gid=3012 0 0\n"
+        "pstore /sys/fs/pstore pstore rw,seclabel,nosuid,nodev,noexec,relatime 0 0\n"
+        "bpf /sys/fs/bpf bpf rw,nosuid,nodev,noexec,relatime 0 0\n"
+        "none /config configfs rw,nosuid,nodev,noexec,relatime 0 0\n"
+        "binder /dev/binderfs binder rw,relatime,max=1048576,stats=global 0 0\n"
+        "/dev/block/sda10 /metadata ext4 rw,seclabel,nosuid,nodev,noatime,discard,nodelalloc,commit=1,data=journal 0 0\n"
+        "/dev/block/dm-38 /data f2fs " + data_opts +
+        "tmpfs /data_mirror " + tmp + ",gid=1000 0 0\n";
+    for (const char* d : {"/data_mirror/data_ce/null", "/data_mirror/data_de/null", "/data_mirror/misc_ce/null",
+                          "/data_mirror/misc_de/null", "/data_mirror/cur_profiles", "/data_mirror/ref_profiles",
+                          "/data_mirror/data_ce/null/0", "/data/user/0"})
+        m += std::string("/dev/block/dm-38 ") + d + " f2fs " + data_opts;
+    std::vector<std::string> apexes;
+    if (DIR* d = opendir((R + "/system/apex").c_str())) {
+        while (dirent* e = readdir(d)) {
+            const std::string n = e->d_name;
+            // vendor API 30: the VNDK snapshots of older vendors aren't activated
+            if (n[0] == '.' || n.find('.') == std::string::npos || n == "com.android.vndk.v28" || n == "com.android.vndk.v29")
+                continue;
+            apexes.push_back(n);
+        }
+        closedir(d);
+    }
+    std::sort(apexes.begin(), apexes.end());
+    int dm = 11;
+    for (const std::string& n : apexes) {
+        uint32_t h = 2166136261u;
+        for (unsigned char c : n) h = (h ^ c) * 16777619u;
+        // Mainline modules' version form: 33 for T, a train, then build digits
+        const std::string version = "33" + std::to_string(1000 + h % 9000) + "000";
+        const std::string dev = "/dev/block/dm-" + std::to_string(dm++);
+        m += dev + " /apex/" + n + "@" + version + " ext4 ro,dirsync,seclabel,nodev,noatime 0 0\n";
+        m += dev + " /apex/" + n + " ext4 ro,dirsync,seclabel,nodev,noatime 0 0\n";
+    }
+    m += "/dev/fuse /mnt/user/0/emulated fuse rw,lazytime,nosuid,nodev,noexec,noatime,user_id=0,group_id=0,allow_other 0 0\n"
+         "/dev/fuse /storage/emulated fuse rw,lazytime,nosuid,nodev,noexec,noatime,user_id=0,group_id=0,allow_other 0 0\n";
+    return m;
+}
+
+bool write_device_view(const std::string& R, const std::string& store, std::string* error) {
     const std::string D = store + "/device";
     if (!remove_if_exists(D, error) || !mkdirs_or_fail(D, error)) return false;
     struct Core { int first, last; const char *variant, *part, *midr; int min_khz, max_khz; };
@@ -905,6 +984,7 @@ bool write_device_view(const std::string& store, std::string* error) {
            // apps open them but don't list them. /dev itself apps can't list.
            write_mode(D + "/unlisted", "/dev/socket/gralloc\n/dev/socket/kgsl-0\n", 0644, error) &&
            write_mode(D + "/unlistable", "/dev\n", 0644, error) &&
+           write_mode(D + "/mounts", device_mounts(R), 0644, error) &&
            // 110.5 GiB: Android reports the device's storage as the power of two above, 128 GB
            write_mode(D + "/data-bytes", "118648471552\n", 0644, error);
 }
@@ -1573,10 +1653,21 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         return false;
     bool radio = false;
     if (!install_radio_hal(R, o.lib_dir, &radio, error)) return false;
+    // see kEglDriverProp: in place, and once (the patched file no longer has the name)
+    bool egl_renamed = false;
+    if (!id.empty()) {
+        const std::string egl = R + "/system/lib64/libEGL.so";
+        if (const auto so = read_file(egl)) {
+            const std::pair<const char*, const char*> kEglStrings[] = {{"ro.hardware.egl", kEglDriverProp}};
+            const std::string patched = replace_cstrings(*so, kEglStrings);
+            if (patched != *so && !write_mode(egl, patched, 0644, error)) return false;
+            egl_renamed = patched.find(std::string(1, '\0') + kEglDriverProp + '\0') != std::string::npos;
+        }
+    }
     // Mobile data off by default: vine_modem fails data calls, and the
     // RIL sets its data interface down when one ends, which may be wlan0
     if (!write_mode(R + "/vendor/waydroid.prop",
-                    waydroid_prop(id.dpi ? id.dpi : o.dpi, o.gpu) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
+                    waydroid_prop(id.dpi ? id.dpi : o.dpi, o.gpu, egl_renamed) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
         return false;
     // gralloc reads ro.vendor.display.gpu in every app, and tawcroot denies
     // apps the vendor_default_prop area that "ro.vendor." falls in
@@ -1615,7 +1706,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         for (const char* f : kCameraHidden) extra_hidden += std::string(f) + "\n";
     if (!id.empty() && !apply_device_features(R, camera, error)) return false;
     if (!patch_health_hal(R, error)) return false;
-    if (id.empty() ? !remove_if_exists(l.store + "/device", error) : !write_device_view(l.store, error)) return false;
+    if (id.empty() ? !remove_if_exists(l.store + "/device", error) : !write_device_view(R, l.store, error)) return false;
     // The guest's /sys/class/power_supply, which VineVMManager fills from
     // the phone's battery
     if (!mkdirs_or_fail(l.work + "/power_supply", error) || chmod((l.work + "/power_supply").c_str(), 0755) != 0)

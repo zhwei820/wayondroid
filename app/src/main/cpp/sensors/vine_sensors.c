@@ -16,7 +16,10 @@
  * event names differ for the magnetic field.
  *
  * Continuous sensors only deliver while the app's uid is in the
- * foreground (SensorService's policy for idle uids). */
+ * foreground (SensorService's policy for idle uids).
+ *
+ * A phone without a barometer (the guest's Pixel 5 has one) gets a
+ * made-up one: sea-level-ish pressure that drifts slowly, with sensor noise. */
 #include <android/looper.h>
 #include <android/sensor.h>
 #include <errno.h>
@@ -28,8 +31,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <math.h>
 #include <sys/stat.h>
+#include <sys/timerfd.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define LOOPER_ID_SENSORS 1
@@ -65,10 +71,32 @@ static struct {
     bool enabled[NMAP];
     int delay_ms;
     int client;
+    bool synth_pressure; /* no phone barometer: kMap's pressure is made up */
+    int synth_timer;
+    double synth_base;
     bool hello_done;
     char in[512];
     size_t in_len;
-} g = {.delay_ms = 200, .client = -1};
+} g = {.delay_ms = 200, .client = -1, .synth_timer = -1};
+
+static bool synthetic(size_t i)
+{
+    return !g.sensor[i] && g.synth_pressure && kMap[i].type == ASENSOR_TYPE_PRESSURE;
+}
+
+/* The made-up barometer's period: the guest's rate, at most 25 Hz as a phone's */
+static void arm_synthetic(bool on)
+{
+    if (g.synth_timer < 0) return;
+    int ms = g.delay_ms < 40 ? 40 : g.delay_ms;
+    struct itimerspec t = {0};
+    if (on) {
+        t.it_interval.tv_sec = ms / 1000;
+        t.it_interval.tv_nsec = (long)(ms % 1000) * 1000000L;
+        t.it_value = t.it_interval;
+    }
+    timerfd_settime(g.synth_timer, 0, &t, NULL);
+}
 
 static void logmsg(const char* fmt, const char* a)
 {
@@ -81,7 +109,7 @@ static uint32_t mask(void)
 {
     uint32_t m = 0;
     for (size_t i = 0; i < NMAP; i++)
-        if (g.sensor[i]) m |= 1u << kMap[i].bit;
+        if (g.sensor[i] || synthetic(i)) m |= 1u << kMap[i].bit;
     return m;
 }
 
@@ -107,6 +135,11 @@ static void apply_rate(size_t i)
 
 static void enable(size_t i, bool on)
 {
+    if (synthetic(i)) {
+        g.enabled[i] = on;
+        arm_synthetic(on);
+        return;
+    }
     if (!g.sensor[i] || g.enabled[i] == on) return;
     if (on) {
         if (ASensorEventQueue_enableSensor(g.queue, g.sensor[i]) < 0) {
@@ -147,7 +180,7 @@ static void handle_command(const char* msg)
     if (sscanf(msg, "set-delay:%d", &delay) == 1) {
         g.delay_ms = delay;
         for (size_t i = 0; i < NMAP; i++)
-            if (g.enabled[i]) apply_rate(i);
+            if (g.enabled[i]) synthetic(i) ? arm_synthetic(true) : apply_rate(i);
         return;
     }
     if (strncmp(msg, "set:", 4) == 0) {
@@ -267,6 +300,26 @@ static int on_sensors(int fd, int events, void* data)
     return 1;
 }
 
+static int on_synthetic(int fd, int events, void* data)
+{
+    (void)events;
+    (void)data;
+    uint64_t ticks;
+    if (read(fd, &ticks, sizeof ticks) != sizeof ticks) return 1;
+    for (size_t i = 0; i < NMAP; i++) {
+        if (!synthetic(i) || !g.enabled[i]) continue;
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        const double t = (double)now.tv_sec + now.tv_nsec / 1e9;
+        /* weather-scale drift over hours, and the sensor's few-Pa noise */
+        const double hpa = g.synth_base + 0.8 * sin(t / 5400.0) + ((double)rand() / RAND_MAX - 0.5) * 0.04;
+        char text[64];
+        snprintf(text, sizeof text, "%s:%.4f", kMap[i].event, hpa);
+        send_frame(text);
+    }
+    return 1;
+}
+
 static int listen_on(const char* path)
 {
     struct sockaddr_un sa = {.sun_family = AF_UNIX};
@@ -326,9 +379,21 @@ int main(int argc, char** argv)
         logmsg("%s", "no sensor manager");
         return 1;
     }
+    bool has_pressure = false;
     for (size_t i = 0; i < NMAP; i++) {
         g.sensor[i] = ASensorManager_getDefaultSensor(g.manager, kMap[i].type);
         if (g.sensor[i]) logmsg("has %s", kMap[i].set_name);
+        if (g.sensor[i] && kMap[i].type == ASENSOR_TYPE_PRESSURE) has_pressure = true;
+    }
+    if (!has_pressure) {
+        g.synth_timer = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+        if (g.synth_timer >= 0) {
+            g.synth_pressure = true;
+            srand((unsigned)time(NULL));
+            g.synth_base = 1008.0 + (double)(rand() % 1000) / 100.0;
+            ALooper_addFd(g.looper, g.synth_timer, 0, ALOOPER_EVENT_INPUT, on_synthetic, NULL);
+            logmsg("%s", "made-up pressure");
+        }
     }
     g.queue = ASensorManager_createEventQueue(g.manager, g.looper, LOOPER_ID_SENSORS, on_sensors, NULL);
     if (!g.queue) {

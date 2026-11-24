@@ -838,7 +838,8 @@ long tawcroot_mounts_proc_open(const char *path, int flags)
     drain();
     long fd = tawc_memfd_create("tawcroot-mounts", (flags & O_CLOEXEC) ? 1 : 0);
     if (fd < 0) return fd;
-    long e = render((int)fd, tawc_streq(p, "mountinfo"));
+    long e = tawcroot_device_mounts((int)fd, tawc_streq(p, "mountinfo"));
+    if (e == TAWC_ENOSYS) e = render((int)fd, tawc_streq(p, "mountinfo"));
     if (e) { tawc_close((int)fd); return e; }
     (void)tawc_lseek((int)fd, 0, SEEK_SET);
     return g_tab ? watchable(fd, (flags & O_CLOEXEC) != 0, tawc_streq(p, "mountinfo")) : fd;

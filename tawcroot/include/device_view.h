@@ -15,6 +15,8 @@
  *   hwcap          masks for the AT_HWCAP/AT_HWCAP2 every exec'd guest gets
  *   unlisted       paths apps' directory listings leave out (they still open)
  *   unlistable     directories apps may not open for reading (EACCES)
+ *   mounts         apps' /proc/<pid>/mounts (mountinfo made from it), and
+ *                  their own profile mounts after it
  *
  * /proc/self/auxv is the auxv the loader built, for every guest process.
  * With the directory present, apps' /proc/self/status also reads as a
@@ -50,6 +52,10 @@ void tawcroot_device_statfs(long *st);
 /* Rewrites release and version of a kernel struct new_utsname (six
  * 65-byte fields) at `uts`, guest memory; 0 or -errno */
 long tawcroot_device_uname(char *uts);
+
+/* Writes an app's mounts (info: mountinfo) to `out`; TAWC_ENOSYS
+ * without a template, for the namespace's own table */
+long tawcroot_device_mounts(int out, int info);
 
 /* sysinfo(2), lazily trapped in init sessions */
 long tawcroot_device_sysinfo(const tawcroot_syscall_args *a, ucontext_t *uc);
