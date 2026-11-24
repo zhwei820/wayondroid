@@ -1,9 +1,15 @@
 package com.android.server;
 
+import android.content.Context;
+import android.content.Intent;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
+import android.os.UserHandle;
 
 import java.lang.reflect.Method;
 import java.net.Inet4Address;
@@ -146,6 +152,62 @@ public final class VineWifiInfo {
             // SSID alone
         }
         return s;
+    }
+
+    /** Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT (hidden), as WifiService sends these */
+    private static final int FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT = 0x04000000;
+
+    private static volatile boolean announced;
+
+    /**
+     * WifiManager's sticky state broadcast as Wi-Fi enabled, once per class
+     * loader: WifiService leaves it disabled, and apps read it on registering
+     */
+    public static void announceEnabled() {
+        if (announced || wlan0() == null) return;
+        Context context = systemContext();
+        if (context == null) return;
+        announced = true;
+        Intent i = new Intent(WifiManager.WIFI_STATE_CHANGED_ACTION);
+        i.addFlags(FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+        i.putExtra(WifiManager.EXTRA_WIFI_STATE, WifiManager.WIFI_STATE_ENABLED);
+        i.putExtra(WifiManager.EXTRA_PREVIOUS_WIFI_STATE, WifiManager.WIFI_STATE_DISABLED);
+        try {
+            context.sendStickyBroadcastAsUser(i, all());
+        } catch (Exception e) {
+            announced = false;
+        }
+    }
+
+    /** A scan's end, as a scan takes a moment: SCAN_RESULTS_AVAILABLE, results updated */
+    public static void announceScan() {
+        Context context = systemContext();
+        if (context == null) return;
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            Intent i = new Intent(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION);
+            i.addFlags(FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+            i.putExtra(WifiManager.EXTRA_RESULTS_UPDATED, true);
+            try {
+                context.sendBroadcastAsUser(i, all());
+            } catch (Exception e) {
+                // no broadcast
+            }
+        }, 2000);
+    }
+
+    static UserHandle all() throws Exception {
+        return (UserHandle) UserHandle.class.getField("ALL").get(null);
+    }
+
+    /** system_server's context (hidden: ActivityThread.getSystemContext) */
+    static Context systemContext() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object thread = at.getMethod("currentActivityThread").invoke(null);
+            return thread == null ? null : (Context) at.getMethod("getSystemContext").invoke(thread);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     static void set(WifiInfo info, String name, Class<?> type, Object value) {

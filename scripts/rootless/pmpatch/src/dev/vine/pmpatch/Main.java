@@ -196,11 +196,12 @@ public final class Main {
         return renamed || redirected;
     }
 
-    /** In WifiServiceImpl's getWifiEnabledState, getConnectionInfo and getScanResults */
+    /** In WifiServiceImpl's getWifiEnabledState, getConnectionInfo, getScanResults and startScan */
     static boolean redirectWifi(Method m, MutableMethodImplementation impl) {
         if (m.getName().equals("getWifiEnabledState") && m.getParameterTypes().isEmpty())
             return redirect(impl, PATCHES[2], "Lcom/android/server/wifi/ActiveModeWarden;", "getWifiState");
-        if (m.getName().equals("getConnectionInfo") || m.getName().equals("getScanResults"))
+        if (m.getName().equals("getConnectionInfo") || m.getName().equals("getScanResults")
+                || m.getName().equals("startScan"))
             return redirect(impl, PATCHES[2], "Lcom/android/server/wifi/WifiThreadRunner;", "call");
         return false;
     }

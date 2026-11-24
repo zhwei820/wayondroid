@@ -142,6 +142,10 @@ public class Main extends Activity {
             scan.append(e);
         }
         put("wifi.scan", scan);
+        android.content.Intent sticky = registerReceiver(null,
+                new android.content.IntentFilter(android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION));
+        put("wifi.sticky", sticky == null ? null : sticky.getIntExtra(android.net.wifi.WifiManager.EXTRA_WIFI_STATE, -1));
+        put("wifi.startScan", wm.startScan());
         put("wifi.info", wi.getBSSID() + " rssi=" + wi.getRssi() + " " + wi.getLinkSpeed() + "Mbps " + wi.getFrequency()
                 + "MHz std=" + wi.getWifiStandard() + " id=" + wi.getNetworkId() + " " + wi.getSupplicantState()
                 + " ip=" + wi.getIpAddress() + " mac=" + wi.getMacAddress());

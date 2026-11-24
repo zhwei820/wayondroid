@@ -17,7 +17,7 @@ import com.android.server.VineWifiInfo;
  * The interface the guest's overlay makes a Wi-Fi network gets a Wi-Fi
  * network's capabilities: VineWifiInfo's WifiInfo as transport info (which
  * ConnectivityService redacts per app, as on any phone) and no Ethernet
- * specifier.
+ * specifier. Its coming up is Wi-Fi's being enabled, for apps that listen.
  */
 public final class VineEthernet {
     private VineEthernet() {}
@@ -25,7 +25,9 @@ public final class VineEthernet {
     public static EthernetNetworkAgent makeEthernetNetworkAgent(EthernetNetworkFactory.Dependencies deps,
             Context context, Looper looper, NetworkCapabilities nc, LinkProperties lp, NetworkAgentConfig config,
             NetworkProvider provider, EthernetNetworkAgent.Callbacks cb) {
-        return deps.makeEthernetNetworkAgent(context, looper, asWifi(nc), lp, config, provider, cb);
+        EthernetNetworkAgent agent = deps.makeEthernetNetworkAgent(context, looper, asWifi(nc), lp, config, provider, cb);
+        if (nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) VineWifiInfo.announceEnabled();
+        return agent;
     }
 
     static NetworkCapabilities asWifi(NetworkCapabilities nc) {
