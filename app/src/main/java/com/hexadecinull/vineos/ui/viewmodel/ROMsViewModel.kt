@@ -58,7 +58,7 @@ class ROMsViewModel @Inject constructor(private val romRepo: ROMRepository) : Vi
 
     fun delete(rom: ROMImage) {
         viewModelScope.launch {
-            romRepo.delete(rom)
+            if (!romRepo.delete(rom)) _importError.value = "Could not delete ${rom.displayName}"
         }
     }
 

@@ -436,7 +436,11 @@ public class Main extends Activity {
             android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
             put("camera.ids", String.join(",", cm.getCameraIdList()));
         } catch (Exception e) { put("camera.ids", "ERR " + e); }
-        for (String camId : new String[] {"0", "1"}) put("camera.capture." + camId, capture(camId));
+        for (String camId : new String[] {"0", "1"}) put("camera.capture." + camId, capture(camId, 640, 480));
+        for (String camId : new String[] {"0", "1"}) {
+            android.util.Size max = maxJpeg(camId);
+            put("camera.full." + camId, max == null ? "none" : capture(camId, max.getWidth(), max.getHeight()));
+        }
         try {
             android.hardware.camera2.CameraManager cm2 = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
             for (String camId : cm2.getCameraIdList()) {
@@ -532,7 +536,39 @@ public class Main extends Activity {
     }
 
     /** Opens a camera and takes one 640x480 JPEG: "jpeg <bytes> <w>x<h>" or what failed */
-    String capture(String id) {
+    android.util.Size maxJpeg(String id) {
+        try {
+            android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
+            android.hardware.camera2.params.StreamConfigurationMap map = cm.getCameraCharacteristics(id)
+                    .get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            android.util.Size best = null;
+            for (android.util.Size z : map.getOutputSizes(android.graphics.ImageFormat.JPEG))
+                if (best == null || (long) z.getWidth() * z.getHeight() > (long) best.getWidth() * best.getHeight()) best = z;
+            return best;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /* Mean |dY| between horizontal neighbours over the centre 512x512: an upscaled frame has little fine detail */
+    static String detail(android.graphics.Bitmap bm) {
+        int w = Math.min(512, bm.getWidth() - 1), hh = Math.min(512, bm.getHeight());
+        int x0 = (bm.getWidth() - w) / 2, y0 = (bm.getHeight() - hh) / 2;
+        int[] px = new int[w + 1];
+        long sum = 0;
+        for (int y = y0; y < y0 + hh; y++) {
+            bm.getPixels(px, 0, w + 1, x0, y, w + 1, 1);
+            for (int x = 0; x < w; x++) {
+                int a = px[x], b = px[x + 1];
+                int ya = ((a >> 16 & 255) * 3 + (a >> 8 & 255) * 6 + (a & 255)) / 10;
+                int yb = ((b >> 16 & 255) * 3 + (b >> 8 & 255) * 6 + (b & 255)) / 10;
+                sum += Math.abs(ya - yb);
+            }
+        }
+        return String.format("%.2f", sum / (double) (w * hh));
+    }
+
+    String capture(String id, int width, int height) {
         android.os.HandlerThread ht = new android.os.HandlerThread("cam" + id);
         ht.start();
         android.os.Handler h = new android.os.Handler(ht.getLooper());
@@ -545,7 +581,7 @@ public class Main extends Activity {
         final android.hardware.camera2.CameraCaptureSession[] session = {null};
         try {
             android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
-            final android.media.ImageReader reader = android.media.ImageReader.newInstance(640, 480, android.graphics.ImageFormat.JPEG, 2);
+            final android.media.ImageReader reader = android.media.ImageReader.newInstance(width, height, android.graphics.ImageFormat.JPEG, 2);
             reader.setOnImageAvailableListener(r -> {
                 android.media.Image img = r.acquireLatestImage();
                 if (img != null && (++frames[0] < 2 || android.os.SystemClock.uptimeMillis() - since[0] < 3000)) {
@@ -556,7 +592,7 @@ public class Main extends Activity {
                     b.get(jpeg);
                     android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
                     result[0] = "frames=" + frames[0] + " jpeg " + jpeg.length + " " + (bm == null ? "undecodable" : bm.getWidth() + "x" + bm.getHeight()
-                            + " px(320,240)=" + Integer.toHexString(bm.getPixel(320, 240)));
+                            + " px(320,240)=" + Integer.toHexString(bm.getPixel(320, 240)) + " detail=" + detail(bm));
                     img.close();
                     done.countDown();
                 }

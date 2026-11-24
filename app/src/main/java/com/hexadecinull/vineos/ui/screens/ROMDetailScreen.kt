@@ -12,7 +12,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -35,8 +37,31 @@ fun ROMDetailScreen(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val hostAbis = remember { Build.SUPPORTED_ABIS.toList() }
     LaunchedEffect(romId) { vm.load(romId) }
+    // An imported ROM disappears from the list once deleted, so there is nothing left to show here
+    LaunchedEffect(uiState.deleted, uiState.rom == null) {
+        if (uiState.deleted && uiState.rom == null) onBack()
+    }
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(uiState.deleteError) {
+        uiState.deleteError?.let {
+            snackbarHostState.showSnackbar(it)
+            vm.clearDeleteError()
+        }
+    }
+    var confirmDelete by remember { mutableStateOf(false) }
+    if (confirmDelete) {
+        DeleteROMDialog(
+            name = uiState.rom?.displayName ?: "this ROM",
+            onConfirm = {
+                confirmDelete = false
+                vm.delete()
+            },
+            onDismiss = { confirmDelete = false },
+        )
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(uiState.rom?.displayName ?: "ROM") },
@@ -52,7 +77,11 @@ fun ROMDetailScreen(
         val rom = uiState.rom
         if (rom == null) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                if (uiState.isLoading || uiState.deleted) {
+                    CircularProgressIndicator()
+                } else {
+                    Text("This ROM is no longer available.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             return@Scaffold
         }
@@ -106,7 +135,7 @@ fun ROMDetailScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
                 rom.isDownloaded -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = vm::delete, modifier = Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { confirmDelete = true },modifier = Modifier.weight(1f)) {
                         Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("Delete")

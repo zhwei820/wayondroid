@@ -19,30 +19,48 @@ data class ROMDetailUiState(
     val rom: ROMImage? = null,
     val progress: DownloadProgress? = null,
     val runMode: AbiCompat.RunMode = AbiCompat.RunMode.UNAVAILABLE,
+    val isLoading: Boolean = true,
+    val deleted: Boolean = false,
+    val deleteError: String? = null,
 )
+
+private data class DetailFlags(val isLoading: Boolean = true, val deleted: Boolean = false, val deleteError: String? = null)
 
 @HiltViewModel
 class ROMDetailViewModel @Inject constructor(private val romRepo: ROMRepository) : ViewModel() {
     private val romIdFlow = MutableStateFlow("")
+    private val flags = MutableStateFlow(DetailFlags())
 
     // No grace period on uiState: sources are already-cached hot flows, so a rebuild on resubscribe is cheap
     val uiState: StateFlow<ROMDetailUiState> = combine(
         romIdFlow,
         romRepo.roms,
         romRepo.downloadProgress,
-    ) { romId, roms, progress ->
+        flags,
+    ) { romId, roms, progress, f ->
         val rom = roms.find { it.id == romId }
         ROMDetailUiState(
             rom = rom,
             progress = progress[romId],
             runMode = rom?.let { AbiCompat.romRunMode(it) } ?: AbiCompat.RunMode.UNAVAILABLE,
+            isLoading = f.isLoading,
+            deleted = f.deleted,
+            deleteError = f.deleteError,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), ROMDetailUiState())
 
     fun load(id: String) {
         romIdFlow.value = id
-        if (romRepo.getRom(id) == null) {
-            viewModelScope.launch { romRepo.fetchManifest() }
+        if (romRepo.getRom(id) != null) {
+            flags.value = flags.value.copy(isLoading = false)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                romRepo.fetchManifest()
+            } finally {
+                flags.value = flags.value.copy(isLoading = false)
+            }
         }
     }
 
@@ -53,6 +71,16 @@ class ROMDetailViewModel @Inject constructor(private val romRepo: ROMRepository)
 
     fun delete() {
         val rom = romRepo.getRom(romIdFlow.value) ?: return
-        viewModelScope.launch { romRepo.delete(rom) }
+        viewModelScope.launch {
+            flags.value = if (romRepo.delete(rom)) {
+                flags.value.copy(deleted = true, deleteError = null)
+            } else {
+                flags.value.copy(deleteError = "Could not delete ${rom.displayName}")
+            }
+        }
+    }
+
+    fun clearDeleteError() {
+        flags.value = flags.value.copy(deleteError = null)
     }
 }

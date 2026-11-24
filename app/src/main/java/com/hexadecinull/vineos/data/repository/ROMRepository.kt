@@ -125,15 +125,17 @@ class ROMRepository @Inject constructor(@ApplicationContext private val context:
         }
     }
 
-    suspend fun delete(rom: ROMImage) = withContext(Dispatchers.IO) {
+    // False when the file is still on disk; the ROM stays listed so the user can retry
+    suspend fun delete(rom: ROMImage): Boolean = withContext(Dispatchers.IO) {
+        val file = if (rom.isLocal) rom.localPath?.let(::File) else File(romsDir, "${rom.id}.vrom")
+        if (file != null && file.exists() && !file.delete() && file.exists()) return@withContext false
         if (rom.isLocal) {
-            rom.localPath?.let { File(it).delete() }
             _localRoms.value = _localRoms.value.filterNot { it.id == rom.id }
             saveLocalRoms()
         } else {
-            File(romsDir, "${rom.id}.vrom").delete()
             refreshROM(rom.id, null)
         }
+        true
     }
 
     // Copies a picked .vrom into app storage, reads its embedded manifest.json for metadata, and registers it alongside the manifest-fetched ROMs
