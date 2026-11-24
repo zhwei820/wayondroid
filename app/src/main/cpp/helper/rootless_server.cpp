@@ -207,6 +207,10 @@ void RootlessServer::cmd_start(const std::string& id, const std::vector<std::str
         else if (k == "boot_timeout") cfg.boot_timeout_s = to_int(v, cfg.boot_timeout_s);
         else if (k == "graphics") cfg.gpu = v == "gfxstream";
         else if (k == "dns") cfg.dns = parse_dns_servers(v);
+        else if (k == "sim_operator") cfg.sim_operator = v;
+        else if (k == "sim_name") cfg.sim_name = v;
+        else if (k == "net_operator") cfg.net_operator = v;
+        else if (k == "net_name") cfg.net_name = v;
     }
     if (cfg.width < 64 || cfg.height < 64 || cfg.width > 8192 || cfg.height > 8192) {
         return reply(id, false, "unreasonable display size");

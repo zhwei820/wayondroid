@@ -78,8 +78,9 @@ Wayondroid 启动 `.vrom` 文件：一个包含 `manifest.json`、`system.img` �
 需要 Android SDK 和 NDK。Gradle 会构建 tawcroot 和 binderd（`tawcroot/build.sh`）
 以及原生代码。GPU 相关组件（gfxstream 宿主渲染器、guest 的 gfxstream Vulkan 驱动、
 `vine_kumquat`）由 `scripts/gpu/build-gpu.sh` 预编译到 `app/src/main/jniLibs/`。guest 的传感器
-HAL 取自 Android 13 模拟器镜像，由 `scripts/sensors/fetch-hal.py`（需要 `debugfs`）放到同一目录；
-不跑则 guest 没有传感器。
+HAL 和 RIL 取自 Android 13 模拟器镜像，由 `scripts/sensors/fetch-hal.py`（需要 `debugfs`）放到同一目录；
+不跑则 guest 没有传感器，也没有 SIM 卡。RIL 还要 `scripts/radio/build-overlay.sh`（需要 SDK
+build-tools）生成的 overlay，guest 的 framework 才会用它。
 
 宿主测试：运行时用 `tawcroot/test.sh --host`，引擎用 `app/src/main/cpp/tests/native/`
 下的脚本（`run_rootless_tests.sh`、`run_wayland_tests.sh`、`run_display_tests.sh`、

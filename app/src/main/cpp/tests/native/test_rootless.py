@@ -132,7 +132,7 @@ def make_image(src, img, size_mb):
                    stdout=subprocess.DEVNULL)
 
 
-def build_images(top, inst, audio_hal_class=1, sensors_libs=True):
+def build_images(top, inst, audio_hal_class=1, sensors_libs=True, radio_libs=True):
     sysd = os.path.join(top, "sys")
     shutil.rmtree(sysd, ignore_errors=True)
     for d in ("system/bin", "system/etc/init/hw", "system/apex/com.android.art/bin", "system/product/etc", "apex", "dev",
@@ -179,8 +179,15 @@ def build_images(top, inst, audio_hal_class=1, sensors_libs=True):
     open(os.path.join(vend, "build.prop"), "w").write("ro.vendor.product.cpu.abilist=arm64-v8a,armeabi-v7a\nro.vendor.x=1\n")
     os.makedirs(os.path.join(vend, "lib64/hw"))
     open(os.path.join(vend, "lib64/hw/gralloc.default.so"), "w").write("default gralloc\n")
+    if radio_libs:  # the image's radio@1.0 and 1.1, which the RIL uses with the emulator's newer ones
+        for v in ("1.0", "1.1"):
+            open(os.path.join(vend, f"lib64/android.hardware.radio@{v}.so"), "w").write(f"image radio {v}\n")
     make_image(sysd, os.path.join(inst, "system.img"), 16)
     make_image(vend, os.path.join(inst, "vendor.img"), 8)
+
+
+RADIO_LIBS = ["rild", "ril_cuttlefish", "ril_modem", "ril_compat", "ril_cf_fs", "ril_cf_utils"] + \
+    [f"ril_radio_1_{v}" for v in range(2, 7)] + [f"ril_config_1_{v}" for v in range(4)] + ["ril_deprecated", "ril_shim", "telephony_overlay"]
 
 
 def build_libs(lib):
@@ -195,6 +202,9 @@ def build_libs(lib):
     write_exec(os.path.join(lib, "libvine_hal_service.so"), "#!/bin/sh\n# hal\n")
     for part in ("multihal", "ranchu", "wakelock", "shim"):
         write_exec(os.path.join(lib, f"libvine_sensors_{part}.so"), f"sensors {part}\n")
+    for part in RADIO_LIBS:
+        write_exec(os.path.join(lib, f"libvine_{part}.so"), f"radio {part}\n")
+    write_exec(os.path.join(lib, "libvine_modem.so"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > modem.args\nexec sleep 1000\n")
     write_exec(os.path.join(lib, "fakebin/cmd"), FAKE_CMD)
     write_exec(os.path.join(lib, "fakebin/input"), FAKE_INPUT)
 
@@ -310,7 +320,8 @@ def main():
     check(not ok and "outside" in text, "start outside base refused: " + text)
 
     print("[boot]")
-    ok, text = h.call("start", name, inst, "width=640", "height=480", "dpi=240", "refresh=90", "ram_mb=1536")
+    ok, text = h.call("start", name, inst, "width=640", "height=480", "dpi=240", "refresh=90", "ram_mb=1536",
+                      "sim_operator=46000", "sim_name=中国移动", "net_operator=46000", "net_name=CHINA MOBILE")
     check(ok, "start: " + text)
     check(h.wait_state(name, "running") is not None, "reaches running")
     ok, text = h.call("status", name)
@@ -358,6 +369,26 @@ def main():
     check("service vendor.sensors-hal-2-1-multihal /vendor/bin/hw/android.hardware.sensors@2.1-service.multihal\n" in sensors_rc and
           "setenv LD_PRELOAD /vendor/lib64/libvine_sensors_shim.so\n" in sensors_rc and "rlimit" not in sensors_rc, "sensors rc")
     check("<version>2.1</version>" in read(os.path.join(R, "vendor/etc/vintf/manifest/vine-sensors.xml")), "sensors VINTF")
+    check(os.access(os.path.join(R, "vendor/bin/hw/libgoldfish-rild"), os.X_OK) and
+          read(os.path.join(R, "vendor/lib64/libcuttlefish-ril-2.so")) == "radio ril_cuttlefish\n" and
+          read(os.path.join(R, "vendor/lib64/hw/android.hardware.radio-library.compat.so")) == "radio ril_compat\n" and
+          read(os.path.join(R, "vendor/lib64/android.hardware.radio@1.6.so")) == "radio ril_radio_1_6\n" and
+          read(os.path.join(R, "vendor/lib64/android.hardware.radio.deprecated@1.0.so")) == "radio ril_deprecated\n",
+          "RIL installed")
+    check(read(os.path.join(R, "vendor/lib64/android.hardware.radio@1.0.so")) == "image radio 1.0\n", "radio@1.0 is the image's")
+    check(read(os.path.join(R, "vendor/overlay/VineTelephony.apk")) == "radio telephony_overlay\n", "telephony overlay installed")
+    radio_rc = read(os.path.join(R, "vendor/etc/init/vine-radio.rc"))
+    check(radio_rc.startswith("service vendor.ril-daemon /vendor/bin/hw/libgoldfish-rild -l /vendor/lib64/libcuttlefish-ril-2.so\n")
+          and "user radio\n" in radio_rc and "setenv LD_PRELOAD /vendor/lib64/libvine_ril_shim.so\n" in radio_rc and
+          read(os.path.join(R, "vendor/lib64/libvine_ril_shim.so")) == "radio ril_shim\n", "RIL rc and shim: " + radio_rc)
+    radio_vintf = read(os.path.join(R, "vendor/etc/vintf/manifest/vine-radio.xml"))
+    check(radio_vintf.count("<hal format=\"aidl\">") == 7 and "<fqname>IRadioSim/slot1</fqname>" in radio_vintf and
+          "<fqname>IRadioConfig/default</fqname>" in radio_vintf, "RIL VINTF")
+    check("android.hardware.telephony" in read(os.path.join(R, "vendor/etc/permissions/vine-telephony.xml")), "telephony feature")
+    check("ro.com.android.mobiledata=false\n" in read(os.path.join(R, "vendor/waydroid.prop")), "mobile data off")
+    check(read(os.path.join(W, "modem.args")).split("\n")[:-1] ==
+          ["--socket", "run/vine-modem", "--seed", name, "--sim-operator", "46000", "--sim-name", "中国移动",
+           "--net-operator", "46000", "--net-name", "CHINA MOBILE"], "vine_modem gets the phone's SIM")
     check("<op n=\"24\"" in read(os.path.join(W, "data/system/appops.xml")), "appops seeded")
     for d in ("data/misc/ethernet", "data/misc/apexdata/com.android.tethering/misc/ethernet"):
         with open(os.path.join(W, d, "ipconfig.txt"), "rb") as f:
@@ -369,7 +400,7 @@ def main():
     check(os.path.isdir(os.path.join(R, "dev/input")) and os.path.isfile(os.path.join(R, "dev/kmsg")), "dev dirs")
     check(os.path.getsize(os.path.join(W, "tawcroot/owners")) > 0, "ownership table")
     init_dir = os.path.join(R, "vendor/etc/init")
-    check(sorted(os.listdir(init_dir)) == ["audio.rc", "light.rc", "vine-sensors.rc"], "32-bit omx rc dropped: " + str(os.listdir(init_dir)))
+    check(sorted(os.listdir(init_dir)) == ["audio.rc", "light.rc", "vine-radio.rc", "vine-sensors.rc"], "32-bit omx rc dropped: " + str(os.listdir(init_dir)))
     man = read(os.path.join(R, "vendor/etc/vintf/manifest.xml"))
     check("media.omx" not in man and "<name>android.hardware.light</name>" in man and man.count("<hal") == 1, "manifest: " + man)
     check("media.omx" not in read(os.path.join(R, "vendor/etc/vintf/manifest/omx.xml")), "manifest fragment")
@@ -442,13 +473,17 @@ def main():
     name64 = "fedcba98-4567-89ef-0123-456789abcdef"
     inst64 = os.path.join(base, name64)
     os.makedirs(inst64)
-    build_images(top, inst64, audio_hal_class=2, sensors_libs=False)
+    build_images(top, inst64, audio_hal_class=2, sensors_libs=False, radio_libs=False)
     ok, text = h.call("start", name64, inst64)
     check(ok and h.wait_state(name64, "running") is not None, "64-bit image boots: " + text)
     R64 = os.path.join(inst64, "rootless/rootfs")
     check(not os.path.exists(os.path.join(R64, "vendor/bin/hw/vine_hal_service")), "no own audio HAL")
     check("vine_hal_service" not in read(os.path.join(R64, "system/product/etc/init/vine-rootless.rc")), "rc keeps the image's")
     check(not os.path.exists(os.path.join(R64, "vendor/etc/init/vine-sensors.rc")), "no sensors HAL without the image's libraries")
+    check(not os.path.exists(os.path.join(R64, "vendor/etc/init/vine-radio.rc")) and
+          "mobiledata" not in read(os.path.join(R64, "vendor/waydroid.prop")), "no RIL without the image's radio@1.0")
+    check(read(os.path.join(inst64, "rootless/modem.args")).split("\n")[:-1] == ["--socket", "run/vine-modem", "--seed", name64],
+          "no SIM passed: vine_modem without one")
     ok, _ = h.call("stop", name64)
     check(ok, "stop the 64-bit instance")
 

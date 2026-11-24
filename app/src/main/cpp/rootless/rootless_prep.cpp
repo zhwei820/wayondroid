@@ -467,6 +467,83 @@ bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::
                       0644, error);
 }
 
+// The emulator's RIL (scripts/sensors/fetch-hal.py) and its shim, on
+// vine_modem's socket, and an overlay that lets the framework use it. The image has none, so telephony sees no SIM without it; without
+// the prebuilts nothing changes. Its interface libraries are the
+// emulator's but for radio@1.0 and 1.1, which the image has: unlike the
+// sensors HAL, the RIL serves the AIDL radio HALs and only uses its HIDL
+// types in-process.
+const std::pair<const char*, const char*> kRadioFiles[] = {
+    {"libvine_rild.so", "/bin/hw/libgoldfish-rild"},
+    {"libvine_ril_cuttlefish.so", "/lib64/libcuttlefish-ril-2.so"},
+    {"libvine_ril_modem.so", "/lib64/libril-modem-lib.so"},
+    {"libvine_ril_compat.so", "/lib64/hw/android.hardware.radio-library.compat.so"},
+    {"libvine_ril_cf_fs.so", "/lib64/libcuttlefish_fs.so"},
+    {"libvine_ril_cf_utils.so", "/lib64/libcuttlefish_utils.so"},
+    {"libvine_ril_radio_1_2.so", "/lib64/android.hardware.radio@1.2.so"},
+    {"libvine_ril_radio_1_3.so", "/lib64/android.hardware.radio@1.3.so"},
+    {"libvine_ril_radio_1_4.so", "/lib64/android.hardware.radio@1.4.so"},
+    {"libvine_ril_radio_1_5.so", "/lib64/android.hardware.radio@1.5.so"},
+    {"libvine_ril_radio_1_6.so", "/lib64/android.hardware.radio@1.6.so"},
+    {"libvine_ril_config_1_0.so", "/lib64/android.hardware.radio.config@1.0.so"},
+    {"libvine_ril_config_1_1.so", "/lib64/android.hardware.radio.config@1.1.so"},
+    {"libvine_ril_config_1_2.so", "/lib64/android.hardware.radio.config@1.2.so"},
+    {"libvine_ril_config_1_3.so", "/lib64/android.hardware.radio.config@1.3.so"},
+    {"libvine_ril_deprecated.so", "/lib64/android.hardware.radio.deprecated@1.0.so"},
+    {"libvine_ril_shim.so", "/lib64/libvine_ril_shim.so"},
+    // scripts/radio/build-overlay.sh: without it the framework never uses the RIL
+    {"libvine_telephony_overlay.so", "/overlay/VineTelephony.apk"},
+};
+
+// *installed stays false without the prebuilts or the image's radio@1.0 and 1.1
+bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* installed, std::string* error) {
+    *installed = false;
+    const std::string V = R + "/vendor";
+    for (const auto& [lib, path] : kRadioFiles) {
+        if (!is_regular_file(lib_dir + "/" + lib)) return true;
+    }
+    for (const char* f : {"/lib64/android.hardware.radio@1.0.so", "/lib64/android.hardware.radio@1.1.so"}) {
+        if (!is_regular_file(V + f)) return true;
+    }
+    for (const char* d : {"/bin/hw", "/lib64/hw", "/etc/init", "/etc/vintf/manifest", "/etc/permissions", "/overlay"}) {
+        if (!mkdirs_or_fail(V + d, error)) return false;
+    }
+    for (const auto& [lib, path] : kRadioFiles) {
+        if (!copy_mode(lib_dir + "/" + lib, V + path, std::string(path).rfind("/bin/", 0) == 0 ? 0755 : 0644, error))
+            return false;
+    }
+    std::string manifest = "<manifest version=\"1.0\" type=\"device\">\n";
+    for (const char* hal : {"config/IRadioConfig/default", "data/IRadioData/slot1", "messaging/IRadioMessaging/slot1",
+                            "modem/IRadioModem/slot1", "network/IRadioNetwork/slot1", "sim/IRadioSim/slot1",
+                            "voice/IRadioVoice/slot1"}) {
+        const std::string h = hal;
+        const size_t slash = h.find('/');
+        manifest += "    <hal format=\"aidl\">\n        <name>android.hardware.radio." + h.substr(0, slash) +
+                    "</name>\n        <fqname>" + h.substr(slash + 1) + "</fqname>\n    </hal>\n";
+    }
+    manifest += "</manifest>\n";
+    if (!write_mode(V + "/etc/vintf/manifest/vine-radio.xml", manifest, 0644, error) ||
+        // The emulator's rc, with the RIL library named (without
+        // ro.boot.qemu it is not found) and the shim that leads it to vine_modem
+        !write_mode(V + "/etc/init/vine-radio.rc",
+                    "service vendor.ril-daemon /vendor/bin/hw/libgoldfish-rild -l /vendor/lib64/libcuttlefish-ril-2.so\n"
+                    "    class main\n"
+                    "    user radio\n"
+                    "    group radio cache inet misc audio log readproc wakelock\n"
+                    "    setenv LD_PRELOAD /vendor/lib64/libvine_ril_shim.so\n",
+                    0644, error) ||
+        // A phone's: apps check for it before they read the SIM
+        !write_mode(V + "/etc/permissions/vine-telephony.xml",
+                    "<permissions>\n"
+                    "    <feature name=\"android.hardware.telephony\" />\n"
+                    "    <feature name=\"android.hardware.telephony.gsm\" />\n"
+                    "</permissions>\n",
+                    0644, error))
+        return false;
+    *installed = true;
+    return true;
+}
+
 } // namespace
 
 Layout layout_for(const std::string& instance_path) {
@@ -880,7 +957,13 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         !write_mode(product_vine + "/check_display.sh", kCheckDisplay, 0755, error) ||
         !write_mode(product_vine + "/captive_portal_urls.sh", kCaptivePortalUrls, 0755, error))
         return false;
-    if (!write_mode(R + "/vendor/waydroid.prop", waydroid_prop(o.dpi, o.gpu), 0644, error)) return false;
+    bool radio = false;
+    if (!install_radio_hal(R, o.lib_dir, &radio, error)) return false;
+    // Mobile data off by default: vine_modem fails data calls, and the
+    // RIL sets its data interface down when one ends, which may be eth0
+    if (!write_mode(R + "/vendor/waydroid.prop",
+                    waydroid_prop(o.dpi, o.gpu) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
+        return false;
     // gralloc reads ro.vendor.vine.gpu in every app, and tawcroot denies
     // apps the vendor_default_prop area that "ro.vendor." falls in
     const std::string vendor_prop_contexts = R + "/vendor/etc/selinux/vendor_property_contexts";

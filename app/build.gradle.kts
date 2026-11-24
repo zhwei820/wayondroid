@@ -111,6 +111,8 @@ android {
         jniLibs {
             // libvine_helper.so is an executable that su starts, so it has to be extracted to disk instead of mapped from the APK
             useLegacyPackaging = true
+            // An APK (the guest's telephony overlay) under a library name, not an ELF to strip
+            keepDebugSymbols += "**/libvine_telephony_overlay.so"
         }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

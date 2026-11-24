@@ -114,6 +114,10 @@ add_executable(vine_sensors sensors/vine_sensors.c)
 target_link_libraries(vine_sensors PRIVATE ${android-lib})
 target_link_options(vine_sensors PRIVATE -pie -Wl,-z,max-page-size=16384)
 
+# Rootless guest SIM: answers the AT commands of the guest's RIL with the phone's carrier
+add_executable(vine_modem radio/vine_modem.c)
+target_link_options(vine_modem PRIVATE -pie -Wl,-z,max-page-size=16384)
+
 # Copied into the guest as its audio HAL service on hosts without AArch32 (the image's is 32-bit only)
 add_executable(vine_hal_service rootless/hal_service.cpp)
 target_link_libraries(vine_hal_service PRIVATE dl)
@@ -137,7 +141,13 @@ target_compile_options(vine_sensors_shim PRIVATE -fvisibility=hidden)
 target_link_libraries(vine_sensors_shim PRIVATE dl)
 target_link_options(vine_sensors_shim PRIVATE -Wl,-z,max-page-size=16384)
 
-foreach(tool vine_wl vine_lmkd vine_pulse vine_sensors vine_hal_service)
+# Preloaded into the guest's RIL: its vsock modem connection leads to vine_modem
+add_library(vine_ril_shim SHARED rootless/ril_shim.c)
+target_compile_options(vine_ril_shim PRIVATE -fvisibility=hidden)
+target_link_libraries(vine_ril_shim PRIVATE dl)
+target_link_options(vine_ril_shim PRIVATE -Wl,-z,max-page-size=16384)
+
+foreach(tool vine_wl vine_lmkd vine_pulse vine_sensors vine_modem vine_hal_service)
     set_target_properties(${tool} PROPERTIES PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "${tool}")
     if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
         set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")

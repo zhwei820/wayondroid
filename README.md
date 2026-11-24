@@ -82,9 +82,10 @@ Needs the Android SDK and NDK. Gradle builds tawcroot and binderd
 (`tawcroot/build.sh`) and the native code. The GPU pieces (gfxstream host
 renderer, the guest's gfxstream Vulkan driver, `vine_kumquat`) are prebuilt by
 `scripts/gpu/build-gpu.sh` into `app/src/main/jniLibs/`. The guest's sensors
-HAL comes from the Android 13 emulator image, fetched there by
+HAL and RIL come from the Android 13 emulator image, fetched there by
 `scripts/sensors/fetch-hal.py` (needs `debugfs`); without it the guest has no
-sensors.
+sensors and no SIM. The RIL also needs `scripts/radio/build-overlay.sh` (SDK
+build-tools), whose overlay lets the guest's framework use it.
 
 Host tests: `tawcroot/test.sh --host` for the runtime and the scripts in
 `app/src/main/cpp/tests/native/` (`run_rootless_tests.sh`,

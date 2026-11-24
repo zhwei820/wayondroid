@@ -19,6 +19,8 @@ struct InstanceConfig {
     int refresh_hz = 60;         // the guest display's frame rate
     int ram_mb = 0;              // vine_lmkd's budget for the guest's apps, 0: none
     std::vector<std::string> dns; // the phone's DNS servers at start, see PrepOptions
+    // The phone's SIM for vine_modem: carrier codes (MCC MNC) and names; no SIM without sim_operator
+    std::string sim_operator, sim_name, net_operator, net_name;
     int boot_timeout_s = 900;    // first boots compile every app
     bool host_has_32bit = false;
     bool gpu = false;            // graphics=gfxstream: vine_kumquat on the host GPU
@@ -84,7 +86,7 @@ private:
     std::string error_;
     bool booted_ = false;
     int64_t phase_since_ms_ = 0;
-    pid_t prep_pid_ = -1, binderd_pid_ = -1, wl_pid_ = -1, pulse_pid_ = -1, sensors_pid_ = -1, kumquat_pid_ = -1, keeper_pid_ = -1, init_pid_ = -1;
+    pid_t prep_pid_ = -1, binderd_pid_ = -1, wl_pid_ = -1, pulse_pid_ = -1, sensors_pid_ = -1, modem_pid_ = -1, kumquat_pid_ = -1, keeper_pid_ = -1, init_pid_ = -1;
     std::vector<pid_t> detached_;
     int input_fd_ = -1;
 };
