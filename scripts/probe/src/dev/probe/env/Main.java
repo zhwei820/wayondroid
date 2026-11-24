@@ -539,17 +539,22 @@ public class Main extends Activity {
         final String[] result = {"timeout"};
         final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
         final android.hardware.camera2.CameraDevice[] dev = {null};
+        /* stream a while first: the camera may show a placeholder until it is ready */
+        final long[] since = {Long.MAX_VALUE};
+        final int[] frames = {0};
         try {
             android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
             final android.media.ImageReader reader = android.media.ImageReader.newInstance(640, 480, android.graphics.ImageFormat.JPEG, 2);
             reader.setOnImageAvailableListener(r -> {
                 android.media.Image img = r.acquireLatestImage();
-                if (img != null) {
+                if (img != null && (++frames[0] < 2 || android.os.SystemClock.uptimeMillis() - since[0] < 3000)) {
+                    img.close();
+                } else if (img != null && done.getCount() > 0) {
                     java.nio.ByteBuffer b = img.getPlanes()[0].getBuffer();
                     byte[] jpeg = new byte[b.remaining()];
                     b.get(jpeg);
                     android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
-                    result[0] = "jpeg " + jpeg.length + " " + (bm == null ? "undecodable" : bm.getWidth() + "x" + bm.getHeight()
+                    result[0] = "frames=" + frames[0] + " jpeg " + jpeg.length + " " + (bm == null ? "undecodable" : bm.getWidth() + "x" + bm.getHeight()
                             + " px(320,240)=" + Integer.toHexString(bm.getPixel(320, 240)));
                     img.close();
                     done.countDown();
@@ -564,9 +569,10 @@ public class Main extends Activity {
                                     @Override public void onConfigured(android.hardware.camera2.CameraCaptureSession sess) {
                                         try {
                                             android.hardware.camera2.CaptureRequest.Builder rb =
-                                                    d.createCaptureRequest(android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE);
+                                                    d.createCaptureRequest(android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW);
                                             rb.addTarget(reader.getSurface());
-                                            sess.capture(rb.build(), null, h);
+                                            since[0] = android.os.SystemClock.uptimeMillis();
+                                            sess.setRepeatingRequest(rb.build(), null, h);
                                         } catch (Exception e) { result[0] = "capture " + e; done.countDown(); }
                                     }
                                     @Override public void onConfigureFailed(android.hardware.camera2.CameraCaptureSession sess) {
