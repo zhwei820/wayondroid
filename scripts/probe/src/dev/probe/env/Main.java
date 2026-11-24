@@ -144,7 +144,7 @@ public class Main extends Activity {
         close.setText("关闭");
         close.setOnClickListener(v -> {
             close();
-            finish();
+            finishAndRemoveTask();
         });
         readings = new TextView(this);
         readings.setTypeface(android.graphics.Typeface.MONOSPACE);

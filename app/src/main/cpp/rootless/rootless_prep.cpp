@@ -1040,6 +1040,8 @@ bool write_device_view(const std::string& R, const std::string& store, std::stri
            write_mode(D + "/uname", "4.19.269-g8728c337137c-ab10161573\n#1 SMP PREEMPT Thu May 18 11:19:41 UTC 2023\n",
                       0644, error) &&
            write_mode(D + "/meminfo-kb", "7612308\n", 0644, error) &&
+           // A 4.19 kernel's highest policy version (31, POLICYDB_VERSION_INFINIBAND)
+           write_mode(D + "/policyvers", "31\n", 0644, error) &&
            // The GPU drivers' sockets (see the symlinks below) are no phone's;
            // apps open them but don't list them. /dev itself apps can't list.
            write_mode(D + "/unlisted", "/dev/socket/gralloc\n/dev/socket/kgsl-0\n", 0644, error) &&

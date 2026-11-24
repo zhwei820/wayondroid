@@ -371,10 +371,18 @@ long tawcroot_device_open(const char *path, int flags)
 	if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_PATH | O_DIRECTORY))) return TAWC_ENOSYS;
 	if (tawc_streq(path, "/proc/meminfo")) return open_meminfo(flags);
 	if (own_proc_file(path, "auxv")) return open_auxv(flags);
-	if (!tawcroot_guest_is_app() || !has_device()) return TAWC_ENOSYS;
+	if (!has_device()) return TAWC_ENOSYS;
 	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
 	char *buf = scratch->buf[1];
 	long n;
+	/* The kernel's SELinux policy version, for everyone: system_server's
+	 * VINTF check needs it (the phone's is unreadable) and the guest's
+	 * kernel is the device's */
+	if (tawc_streq(path, "/sys/fs/selinux/policyvers")) {
+		n = read_device("policyvers", buf, TAWCROOT_PATH_SCRATCH_SIZE);
+		return n > 0 ? memfd_of("tawcroot-policyvers", buf, (size_t)n, flags) : TAWC_ENOSYS;
+	}
+	if (!tawcroot_guest_is_app()) return TAWC_ENOSYS;
 	if (tawc_streq(path, "/proc/cpuinfo")) {
 		n = read_device("cpuinfo", buf, TAWCROOT_PATH_SCRATCH_SIZE);
 		return n > 0 ? memfd_of("tawcroot-cpuinfo", buf, (size_t)n, flags) : TAWC_ENOSYS;
