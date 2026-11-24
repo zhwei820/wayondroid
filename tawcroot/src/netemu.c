@@ -1,5 +1,5 @@
 /* `--fake-net`: the guest sees a loopback, one link, wlan0, and dummy0 (as
- * a phone's kernel has: up, no addresses, no traffic),
+ * a phone's kernel has: up, only its link-local address, no traffic),
  * configured over rtnetlink and SIOC* ioctls as on a real kernel, while
  * its traffic goes out through the app's own sockets. An app can't read
  * or change the host's links (NETLINK_ROUTE binds and dumps are denied),
@@ -73,7 +73,7 @@
 #define NE_OPER_DOWN 2
 #define NE_OPER_UP 6
 
-#define NE_MAGIC 0x4e455432u
+#define NE_MAGIC 0x4e455433u
 #define NE_LINKS 3
 #define NE_ADDRS 32
 #define NE_SUBS 64
@@ -124,6 +124,16 @@ static int enabled(void)
 	return (tawcroot_namespace.session & TAWC_NS_FAKE_NET) != 0;
 }
 
+/* The kernel's EUI-64 fe80:: address for a link with this MAC */
+static void link_local(uint8_t out[16], const uint8_t mac[6])
+{
+	memset(out, 0, 16);
+	out[0] = 0xfe; out[1] = 0x80;
+	out[8] = mac[0] ^ 0x02; out[9] = mac[1]; out[10] = mac[2];
+	out[11] = 0xff; out[12] = 0xfe;
+	out[13] = mac[3]; out[14] = mac[4]; out[15] = mac[5];
+}
+
 static void defaults(struct ne_state *s)
 {
 	memset(s, 0, sizeof *s);
@@ -155,6 +165,11 @@ static void defaults(struct ne_state *s)
 	a->index = 1; a->family = NE_INET6; a->prefix = 128; a->scope = RT_SCOPE_HOST;
 	a->used = 1; a->flags = IFA_F_PERMANENT;
 	a->addr[15] = 1;
+	/* Apps list only links with an address: on a phone, dummy0 is one */
+	a = &s->addr[2];
+	a->index = dummy->index; a->family = NE_INET6; a->prefix = 64; a->scope = RT_SCOPE_LINK;
+	a->used = 1; a->flags = IFA_F_PERMANENT;
+	link_local(a->addr, dummy->mac);
 }
 
 static long store_file(char *out, const char *name)
@@ -477,14 +492,31 @@ static void out_done(struct ne_out *o, const struct nlmsghdr *h)
 
 /* ---- link and address changes (rtnetlink and ioctl) ---- */
 
+static struct ne_addr *addr_find(struct ne_state *s, int index, uint8_t family, const uint8_t *addr);
+static long addr_add(struct ne_state *s, int index, uint8_t family, const uint8_t *addr,
+		     uint8_t prefix, uint32_t flags, uint16_t nlflags, uint32_t seq, uint32_t pid);
+static void addr_del(struct ne_state *s, struct ne_addr *a, uint32_t seq, uint32_t pid);
+
+/* As the kernel does for an Ethernet link, its link-local address comes
+ * with UP and goes with DOWN */
 static void set_flags(struct ne_state *s, struct ne_link *l, uint32_t want, uint32_t seq, uint32_t pid)
 {
 	uint32_t f = (l->flags & ~NE_IFF_SETTABLE) | (want & NE_IFF_SETTABLE);
 	if (f & NE_IFF_UP) f |= NE_IFF_RUNNING | NE_IFF_LOWER_UP;
 	else f &= ~(uint32_t)(NE_IFF_RUNNING | NE_IFF_LOWER_UP);
 	if (f == l->flags) return;
+	const uint32_t was = l->flags;
 	l->flags = f;
 	notify_link(s, l, seq, pid);
+	if (l->type != NE_ARPHRD_ETHER || !((was ^ f) & NE_IFF_UP)) return;
+	uint8_t ll[16];
+	link_local(ll, l->mac);
+	struct ne_addr *a = addr_find(s, l->index, NE_INET6, ll);
+	if (f & NE_IFF_UP) {
+		if (!a) (void)addr_add(s, l->index, NE_INET6, ll, 64, IFA_F_PERMANENT, 0, seq, pid);
+	} else if (a) {
+		addr_del(s, a, seq, pid);
+	}
 }
 
 static struct ne_addr *addr_find(struct ne_state *s, int index, uint8_t family, const uint8_t *addr)

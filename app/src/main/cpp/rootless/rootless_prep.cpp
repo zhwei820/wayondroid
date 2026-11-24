@@ -508,20 +508,22 @@ const std::pair<const char*, const char*> kVulkanStrings[] = {
 };
 
 // The emulator's sensor names and vendor, in the ranchu HAL's .rodata,
-// as the Pixel 5's parts (a CPU-Z listing; unverified on a device). Each
+// as the Pixel 5's parts: the chips its vendor.img configures
+// (etc/sensors/config) under the names its ADSP firmware gives them. Each
 // is a whole NUL-terminated string, the new one no longer: apps list the
 // sensors, and "Goldfish" names the emulator. The vendor string is one,
-// shared by every sensor.
+// shared by every sensor; sensors_shim.c sets the other parts' vendors
+// and the step and significant motion sensors.
 const std::pair<const char*, const char*> kSensorNames[] = {
     {"Goldfish 3-axis Accelerometer", "LSM6DSR Accelerometer"},
     {"Goldfish 3-axis Accelerometer Uncalibrated", "LSM6DSR Accelerometer Uncalibrated"},
     {"Goldfish 3-axis Gyroscope", "LSM6DSR Gyroscope"},
     {"Goldfish 3-axis Gyroscope (uncalibrated)", "LSM6DSR Gyroscope Uncalibrated"},
-    {"Goldfish 3-axis Magnetic field sensor", "MMC56X3X Magnetometer"},
-    {"Goldfish 3-axis Magnetic field sensor (uncalibrated)", "MMC56X3X Magnetometer Uncalibrated"},
-    {"Goldfish Proximity sensor", "TMD3719 Proximity"},
-    {"Goldfish Light sensor", "TMD3719 Ambient Light"},
-    {"Goldfish Pressure sensor", "ICP10101 Pressure"},
+    {"Goldfish 3-axis Magnetic field sensor", "LIS2MDL Magnetometer"},
+    {"Goldfish 3-axis Magnetic field sensor (uncalibrated)", "LIS2MDL Magnetometer Uncalibrated"},
+    {"Goldfish Proximity sensor", "TCS3701 Proximity"},
+    {"Goldfish Light sensor", "TCS3701 Ambient Light"},
+    {"Goldfish Pressure sensor", "BMP380 Barometer"},
     {"Goldfish Humidity sensor", "Humidity"},
     {"Goldfish Ambient Temperature sensor", "Ambient Temperature"},
     {"Goldfish Orientation sensor", "Orientation"},
@@ -530,7 +532,7 @@ const std::pair<const char*, const char*> kSensorNames[] = {
     {"Goldfish hinge sensor0 (in degrees)", "Hinge Angle 0"},
     {"Goldfish hinge sensor1 (in degrees)", "Hinge Angle 1"},
     {"Goldfish hinge sensor2 (in degrees)", "Hinge Angle 2"},
-    {"The Android Open Source Project", "STMicroelectronics"},
+    {"The Android Open Source Project", "STMicro"},
 };
 
 bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::string* error) {
@@ -977,7 +979,8 @@ bool write_device_view(const std::string& R, const std::string& store, std::stri
     if (!write_mode(D + "/hwcap", "0x119fff 0x0\n", 0644, error)) return false;
 #endif
     return write_mode(D + "/cpuinfo", cpuinfo, 0644, error) &&
-           write_mode(D + "/uname", "4.19.282-g8b2a6e3c1f0d-ab10577962\n#1 SMP PREEMPT Mon Jul 31 19:57:23 UTC 2023\n",
+           // TQ3A.230901.001.C2's boot.img kernel ("Linux version ..." in its Image)
+           write_mode(D + "/uname", "4.19.269-g8728c337137c-ab10161573\n#1 SMP PREEMPT Thu May 18 11:19:41 UTC 2023\n",
                       0644, error) &&
            write_mode(D + "/meminfo-kb", "7612308\n", 0644, error) &&
            // The GPU drivers' sockets (see the symlinks below) are no phone's;
@@ -1760,11 +1763,19 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     for (const char* d : {"/dev/socket", "/dev/pts", "/dev/input", "/mnt/vendor", "/mnt/product", "/run/user/1000"}) {
         if (!mkdirs_or_fail(R + d, error)) return false;
     }
-    // What a Qualcomm phone's init makes there for its modem and location
-    // daemons (apps can list /dev/socket); nothing serves them here
-    if (!id.empty())
-        for (const char* d : {"/qmux_audio", "/qmux_bluetooth", "/qmux_gps", "/qmux_radio", "/location"})
-            if (!mkdirs_or_fail(R + "/dev/socket" + d, error)) return false;
+    // What the Pixel 5's vendor init makes there (its vendor.img's
+    // etc/init: always-running services' sockets and the dirs it mkdirs),
+    // as apps can list /dev/socket; nothing serves them here
+    if (!id.empty()) {
+        const std::string S = R + "/dev/socket";
+        for (const char* d : {"/qmux_audio", "/qmux_bluetooth", "/qmux_gps"}) rmdir((S + d).c_str());  // earlier guesses
+        for (const char* d : {"/qmux_radio", "/location/mq", "/location/xtra", "/wifihal", "/netmgr", "/port-bridge"})
+            if (!mkdirs_or_fail(S + d, error)) return false;
+        for (const char* f : {"/wpa_wlan0", "/chre", "/ims_qmid", "/ims_datad", "/pps", "/msm_irqbalance", "/ssgtzd",
+                              "/qwes_ipc"})
+            if (mknod((S + f).c_str(), S_IFSOCK | 0660, 0) != 0 && errno != EEXIST)
+                return fail(error, "could not create " + S + f + ": " + strerror(errno));
+    }
     // vine_kumquat's sockets where apps' GPU drivers find them (/run, the
     // engine's, is hidden from apps): gfxstream-vk's default path
     // (kVulkanStrings) and gralloc_gpu.c's

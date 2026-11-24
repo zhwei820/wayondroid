@@ -19,7 +19,13 @@
  * foreground (SensorService's policy for idle uids).
  *
  * A phone without a barometer (the guest's Pixel 5 has one) gets a
- * made-up one: sea-level-ish pressure that drifts slowly, with sensor noise. */
+ * made-up one: sea-level-ish pressure that drifts slowly, with sensor noise.
+ *
+ * The step counter, step detector and significant motion sensors (the
+ * Pixel 5's, which an app could only read from the phone with
+ * ACTIVITY_RECOGNITION) come from a pedometer on the phone's
+ * accelerometer. They go to the guest as the sub-HAL's three hinge
+ * angles, which the guest's sensors_shim.c retypes. */
 #include <android/looper.h>
 #include <android/sensor.h>
 #include <errno.h>
@@ -59,9 +65,17 @@ static const struct map kMap[] = {
     {7, ASENSOR_TYPE_PRESSURE, "pressure", "pressure", 1},
     {8, ASENSOR_TYPE_RELATIVE_HUMIDITY, "humidity", "humidity", 1},
     {9, ASENSOR_TYPE_MAGNETIC_FIELD_UNCALIBRATED, "magnetic-field-uncalibrated", "magnetic-uncalibrated", 3},
+    {10, ASENSOR_TYPE_GYROSCOPE_UNCALIBRATED, "gyroscope-uncalibrated", "gyroscope-uncalibrated", 3},
+    {11, ASENSOR_TYPE_STEP_COUNTER, "hinge-angle0", "hinge-angle0", 1},
+    {12, ASENSOR_TYPE_STEP_DETECTOR, "hinge-angle1", "hinge-angle1", 1},
+    {13, ASENSOR_TYPE_SIGNIFICANT_MOTION, "hinge-angle2", "hinge-angle2", 1},
     {17, ASENSOR_TYPE_ACCELEROMETER_UNCALIBRATED, "acceleration-uncalibrated", "acceleration-uncalibrated", 3},
 };
 #define NMAP (sizeof kMap / sizeof kMap[0])
+#define ACCEL 0          /* kMap index of the accelerometer */
+#define PEDO_MS 20       /* the pedometer's accelerometer rate, 50 Hz */
+#define SMD_STEPS 8      /* significant motion: this many steps ... */
+#define SMD_WINDOW 10.0  /* ... within this many seconds */
 
 static struct {
     ASensorManager* manager;
@@ -77,10 +91,30 @@ static struct {
     bool hello_done;
     char in[512];
     size_t in_len;
+    bool accel_on; /* the phone's accelerometer, for the guest's or the pedometer */
+    struct {
+        double mean, smooth, last_step, recent[SMD_STEPS];
+        bool armed, smd_fired;
+        unsigned steps, recent_n, smd_seq;
+    } pedo;
 } g = {.delay_ms = 200, .client = -1, .synth_timer = -1};
+
+static bool pedometer(size_t i)
+{
+    return kMap[i].type == ASENSOR_TYPE_STEP_COUNTER || kMap[i].type == ASENSOR_TYPE_STEP_DETECTOR ||
+           kMap[i].type == ASENSOR_TYPE_SIGNIFICANT_MOTION;
+}
+
+static bool pedometer_on(void)
+{
+    for (size_t i = 0; i < NMAP; i++)
+        if (pedometer(i) && g.enabled[i]) return true;
+    return false;
+}
 
 static bool synthetic(size_t i)
 {
+    if (pedometer(i)) return g.sensor[ACCEL] != NULL;
     return !g.sensor[i] && g.synth_pressure && kMap[i].type == ASENSOR_TYPE_PRESSURE;
 }
 
@@ -127,14 +161,44 @@ static void send_frame(const char* text)
 
 static void apply_rate(size_t i)
 {
-    int us = (g.delay_ms < MIN_DELAY_MS ? MIN_DELAY_MS : g.delay_ms) * 1000;
+    int ms = g.delay_ms;
+    if (i == ACCEL && pedometer_on() && (!g.enabled[ACCEL] || ms > PEDO_MS)) ms = PEDO_MS;
+    int us = (ms < MIN_DELAY_MS ? MIN_DELAY_MS : ms) * 1000;
     const int min_us = ASensor_getMinDelay(g.sensor[i]);
     if (min_us > 0 && us < min_us) us = min_us;
     ASensorEventQueue_setEventRate(g.queue, g.sensor[i], us);
 }
 
+/* The phone's accelerometer runs while the guest's or the pedometer wants it */
+static void sync_accel(void)
+{
+    const bool want = g.enabled[ACCEL] || pedometer_on();
+    if (want != g.accel_on) {
+        if (want && ASensorEventQueue_enableSensor(g.queue, g.sensor[ACCEL]) < 0) {
+            logmsg("cannot enable %s", kMap[ACCEL].set_name);
+            return;
+        }
+        if (!want) ASensorEventQueue_disableSensor(g.queue, g.sensor[ACCEL]);
+        g.accel_on = want;
+    }
+    if (want) apply_rate(ACCEL);
+}
+
 static void enable(size_t i, bool on)
 {
+    if (pedometer(i)) {
+        if (!synthetic(i)) return;
+        g.enabled[i] = on;
+        if (on && kMap[i].type == ASENSOR_TYPE_SIGNIFICANT_MOTION) g.pedo.smd_fired = false;
+        sync_accel();
+        return;
+    }
+    if (i == ACCEL) {
+        if (!g.sensor[i]) return;
+        g.enabled[i] = on;
+        sync_accel();
+        return;
+    }
     if (synthetic(i)) {
         g.enabled[i] = on;
         arm_synthetic(on);
@@ -156,6 +220,7 @@ static void enable(size_t i, bool on)
 static void disable_all(void)
 {
     for (size_t i = 0; i < NMAP; i++) enable(i, false);
+    g.pedo.steps = 0; /* a new guest boot */
 }
 
 static void drop_client(void)
@@ -180,7 +245,8 @@ static void handle_command(const char* msg)
     if (sscanf(msg, "set-delay:%d", &delay) == 1) {
         g.delay_ms = delay;
         for (size_t i = 0; i < NMAP; i++)
-            if (g.enabled[i]) synthetic(i) ? arm_synthetic(true) : apply_rate(i);
+            if (g.enabled[i] && !pedometer(i)) synthetic(i) ? arm_synthetic(true) : apply_rate(i);
+        sync_accel();
         return;
     }
     if (strncmp(msg, "set:", 4) == 0) {
@@ -269,8 +335,44 @@ static int on_listen(int fd, int events, void* data)
     return 1;
 }
 
+static void send_pedo(int type, unsigned value)
+{
+    for (size_t i = 0; i < NMAP; i++) {
+        if (kMap[i].type != type || !g.enabled[i]) continue;
+        char text[64];
+        snprintf(text, sizeof text, "%s:%u", kMap[i].event, value);
+        send_frame(text);
+    }
+}
+
+/* A step is a swing of |a| below and then above its running mean, at
+ * most ~3.5 a second */
+static void pedometer_feed(const ASensorEvent* e)
+{
+    const double m = sqrt((double)e->data[0] * e->data[0] + (double)e->data[1] * e->data[1] +
+                          (double)e->data[2] * e->data[2]);
+    const double t = (double)e->timestamp / 1e9;
+    if (g.pedo.mean == 0) g.pedo.mean = m;
+    g.pedo.mean += (m - g.pedo.mean) * 0.02;
+    g.pedo.smooth += (m - g.pedo.mean - g.pedo.smooth) * 0.3;
+    if (g.pedo.smooth < -0.6) g.pedo.armed = true;
+    if (!g.pedo.armed || g.pedo.smooth < 1.2 || t - g.pedo.last_step < 0.28) return;
+    g.pedo.armed = false;
+    g.pedo.last_step = t;
+    g.pedo.steps++;
+    send_pedo(ASENSOR_TYPE_STEP_COUNTER, g.pedo.steps);
+    send_pedo(ASENSOR_TYPE_STEP_DETECTOR, g.pedo.steps);
+    g.pedo.recent[g.pedo.recent_n++ % SMD_STEPS] = t;
+    const double oldest = g.pedo.recent[g.pedo.recent_n % SMD_STEPS];
+    if (g.pedo.recent_n >= SMD_STEPS && t - oldest <= SMD_WINDOW && !g.pedo.smd_fired) {
+        g.pedo.smd_fired = true; /* one-shot: the guest re-enables it */
+        send_pedo(ASENSOR_TYPE_SIGNIFICANT_MOTION, ++g.pedo.smd_seq);
+    }
+}
+
 static void forward(const ASensorEvent* e)
 {
+    if (e->type == ASENSOR_TYPE_ACCELEROMETER && pedometer_on()) pedometer_feed(e);
     for (size_t i = 0; i < NMAP; i++) {
         if (kMap[i].type != e->type || !g.enabled[i]) continue;
         char text[128];
@@ -307,7 +409,7 @@ static int on_synthetic(int fd, int events, void* data)
     uint64_t ticks;
     if (read(fd, &ticks, sizeof ticks) != sizeof ticks) return 1;
     for (size_t i = 0; i < NMAP; i++) {
-        if (!synthetic(i) || !g.enabled[i]) continue;
+        if (!synthetic(i) || pedometer(i) || !g.enabled[i]) continue;
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         const double t = (double)now.tv_sec + now.tv_nsec / 1e9;
@@ -381,6 +483,7 @@ int main(int argc, char** argv)
     }
     bool has_pressure = false;
     for (size_t i = 0; i < NMAP; i++) {
+        if (pedometer(i)) continue;
         g.sensor[i] = ASensorManager_getDefaultSensor(g.manager, kMap[i].type);
         if (g.sensor[i]) logmsg("has %s", kMap[i].set_name);
         if (g.sensor[i] && kMap[i].type == ASENSOR_TYPE_PRESSURE) has_pressure = true;

@@ -8,10 +8,22 @@
  * Without vine_sensors the sub-HAL would abort, init would restart it,
  * and system_server, which waits for the declared HAL, would never get
  * past SensorService: then the pipe's other end is local and reports no
- * sensors. */
+ * sensors.
+ *
+ * It also turns the sub-HAL's sensor table into a Pixel 5's (as its
+ * vendor.img and ADSP firmware name the parts): per-part vendors, a
+ * wake-up proximity sensor, and the three hinge-angle slots, which
+ * vine_sensors feeds, as the step counter, step detector and significant
+ * motion sensors. The sub-HAL posts their events as hinge angles;
+ * postSensorEvent, which it calls through its PLT, is interposed to give
+ * them their types and payloads. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <elf.h>
 #include <errno.h>
+#include <link.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -27,6 +39,7 @@
 #endif
 
 static const char kPipe[] = "/dev/goldfish_pipe";
+static const char kSubHal[] = "/sensors.ssc.so";
 static const char kHost[] = "/run/user/1000/vine-sensors";
 
 typedef int (*socket_fn)(int, int, int);
@@ -89,8 +102,151 @@ static int local_host(int flags)
     return sv[0];
 }
 
+/* android::hardware::sensors V1_0::SensorInfo (V2_1's is the same) and
+ * hidl_string, LP64 */
+struct hstr {
+    const char* buf;
+    uint32_t size;
+    bool owns;
+};
+struct sensor_info {
+    int32_t handle;
+    struct hstr name, vendor;
+    int32_t version, type;
+    struct hstr type_string;
+    float max_range, resolution, power;
+    int32_t min_delay;
+    uint32_t fifo_reserved, fifo_max;
+    struct hstr permission;
+    int32_t max_delay;
+    uint32_t flags;
+};
+_Static_assert(sizeof(struct sensor_info) == 0x70, "SensorInfo is 0x70 bytes");
+/* V2_1::Event */
+struct event {
+    int64_t timestamp;
+    int32_t handle, type;
+    union {
+        float data[16];
+        uint64_t step_count;
+    } u;
+};
+
+/* The goldfish handles (sensor_list.h) */
+enum { kProximity = 5, kLight = 6, kPressure = 7, kHinge0 = 11, kHinge1 = 12, kHinge2 = 13, kSensors = 18 };
+enum { kTypeSignificantMotion = 17, kTypeStepDetector = 18, kTypeStepCounter = 19, kTypeHinge = 36 };
+enum { kWakeUp = 1, kOnChange = 2, kOneShot = 4, kSpecial = 6 };
+
+static const struct {
+    int handle, type;
+    const char *name, *vendor, *type_string, *permission;
+    uint32_t flags;
+    int32_t min_delay;
+    float max_range, power;
+} kRetype[] = {
+    {kHinge0, kTypeStepCounter, "Step Counter", "Google", "android.sensor.step_counter",
+     "android.permission.ACTIVITY_RECOGNITION", kOnChange, 0, 4294967296.0f, 0.001f},
+    {kHinge1, kTypeStepDetector, "Step Detector", "Google", "android.sensor.step_detector",
+     "android.permission.ACTIVITY_RECOGNITION", kSpecial, 0, 1.0f, 0.001f},
+    {kHinge2, kTypeSignificantMotion, "Significant Motion", "Google", "android.sensor.significant_motion", "",
+     kOneShot | kWakeUp, -1, 1.0f, 0.001f},
+};
+
+static void set_str(struct hstr* h, const char* text)
+{
+    h->buf = text;
+    h->size = (uint32_t)strlen(text);
+    h->owns = false; /* the old buffer leaks: the table lives as long as the process */
+}
+
+static int find_table(struct dl_phdr_info* info, size_t size, void* out)
+{
+    (void)size;
+    const size_t n = info->dlpi_name ? strlen(info->dlpi_name) : 0;
+    if (n < sizeof kSubHal - 1 || strcmp(info->dlpi_name + n - (sizeof kSubHal - 1), kSubHal)) return 0;
+    for (int p = 0; p < info->dlpi_phnum; p++) {
+        const ElfW(Phdr)* ph = &info->dlpi_phdr[p];
+        if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_W)) continue;
+        const uintptr_t lo = info->dlpi_addr + ph->p_vaddr;
+        const uintptr_t hi = lo + ph->p_memsz;
+        for (uintptr_t a = (lo + 7) & ~(uintptr_t)7; a + kSensors * sizeof(struct sensor_info) <= hi; a += 8) {
+            struct sensor_info* t = (struct sensor_info*)a;
+            int k = 1;
+            while (k < 11 && t[k].handle == k) k++;
+            if (k < 11 || t[kHinge0].handle != kHinge0 || t[kHinge0].type != kTypeHinge ||
+                t[kHinge2].handle != kHinge2 || t[kHinge2].type != kTypeHinge || !t[1].type_string.buf ||
+                strcmp(t[1].type_string.buf, "android.sensor.gyroscope"))
+                continue;
+            *(struct sensor_info**)out = t;
+            return 1;
+        }
+    }
+    return 1;
+}
+
+/* Before the sub-HAL lists its sensors: it opens the pipe to ask which
+ * there are */
+static void patch_table(void)
+{
+    static bool done;
+    if (done) return;
+    done = true;
+    struct sensor_info* t = NULL;
+    dl_iterate_phdr(find_table, &t);
+    if (!t) return;
+    set_str(&t[kPressure].vendor, "Bosch");
+    set_str(&t[kProximity].vendor, "AMS");
+    set_str(&t[kLight].vendor, "AMS");
+    t[kProximity].flags |= kWakeUp;
+    for (size_t i = 0; i < sizeof kRetype / sizeof kRetype[0]; i++) {
+        struct sensor_info* s = &t[kRetype[i].handle];
+        s->type = kRetype[i].type;
+        set_str(&s->name, kRetype[i].name);
+        set_str(&s->vendor, kRetype[i].vendor);
+        set_str(&s->type_string, kRetype[i].type_string);
+        set_str(&s->permission, kRetype[i].permission);
+        s->flags = kRetype[i].flags;
+        s->min_delay = kRetype[i].min_delay;
+        s->max_delay = 0;
+        s->max_range = kRetype[i].max_range;
+        s->resolution = 1.0f;
+        s->power = kRetype[i].power;
+        s->fifo_reserved = s->fifo_max = 0;
+    }
+}
+
+typedef void (*post_fn)(void*, const struct event*);
+
+/* vine_sensors sends hinge angles: the step count, and for the detector
+ * and significant motion a value that changes on each event (the sub-HAL
+ * posts a hinge angle only when it changes) */
+EXPORT void _ZN8goldfish15MultihalSensors15postSensorEventERKN7android8hardware7sensors4V2_15EventE(
+    void* self, const struct event* e)
+{
+    static post_fn real;
+    if (!real)
+        real = (post_fn)dlsym(RTLD_NEXT,
+                              "_ZN8goldfish15MultihalSensors15postSensorEventERKN7android8hardware7sensors4V2_15EventE");
+    if (!real) return;
+    if (e->type != kTypeHinge || e->handle < kHinge0 || e->handle > kHinge2) {
+        real(self, e);
+        return;
+    }
+    struct event out = *e;
+    memset(&out.u, 0, sizeof out.u);
+    if (e->handle == kHinge0) {
+        out.type = kTypeStepCounter;
+        out.u.step_count = e->u.data[0] > 0 ? (uint64_t)e->u.data[0] : 0;
+    } else {
+        out.type = e->handle == kHinge1 ? kTypeStepDetector : kTypeSignificantMotion;
+        out.u.data[0] = 1.0f;
+    }
+    real(self, &out);
+}
+
 static int open_pipe(int flags)
 {
+    patch_table();
     const int fd = real_socket(AF_UNIX, SOCK_STREAM | ((flags & O_CLOEXEC) ? SOCK_CLOEXEC : 0), 0);
     if (fd < 0) return -1;
     struct sockaddr_un sa = {.sun_family = AF_UNIX};

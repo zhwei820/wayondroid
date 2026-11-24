@@ -74,18 +74,70 @@ FILES = {
 }
 
 
-def single_front_camera(data):
-    """The front configuration is a logical camera over three physical
-    ones; a Pixel 5 has one front camera: the first physical one's"""
+def _load(data):
     import json
     import re
     text = re.sub(r",(\s*[\]}])", r"\1", data.decode())  # jsoncpp takes trailing commas, json does not
-    cams = json.loads(text)
-    return json.dumps(cams[1] if isinstance(cams, list) else cams, indent=1).encode()
+    return json.loads(text)
+
+
+# A Pixel 5's: sensor (pixels, physical mm = pixels x pitch), lens
+PIXEL5_CAMERAS = {
+    # IMX363, 1.4 um, 4.38 mm f/1.73
+    "back": dict(size=(4032, 3024), physical=("5.64480019", "4.23360014"), focal="4.38000011",
+                 aperture="1.73000002", facing="BACK", orientation="90", level="3"),
+    # IMX355, 1.12 um, f/2.0; the focal length from its 84 degree diagonal field of view
+    "front": dict(size=(3264, 2448), physical=("3.65568018", "2.74176002"), focal="2.50999999",
+                  aperture="2.00000000", facing="FRONT", orientation="270", level="FULL"),
+}
+SIZED_KEYS = ("android.scaler.availableStreamConfigurations", "android.scaler.availableMinFrameDurations",
+              "android.scaler.availableStallDurations", "android.control.availableExtendedSceneModeMaxSizes")
+
+
+def pixel5_camera(back_data, which):
+    """The emulator's back camera (one sensor, LEVEL_3, RAW) as a Pixel 5
+    camera: its largest size becomes the Pixel 5 sensor's, wherever a size
+    appears, and the optics are the Pixel 5's. The test scene stays."""
+    import json
+    cam = _load(back_data)
+    spec = PIXEL5_CAMERAS[which]
+    w0, h0 = (int(v) for v in cam["android.sensor.info.pixelArraySize"])
+    w, h = spec["size"]
+    for key in SIZED_KEYS:
+        v = cam[key]
+        for i in range(len(v) - 1):
+            if v[i] == str(w0) and v[i + 1] == str(h0):
+                v[i], v[i + 1] = str(w), str(h)
+    cam["android.sensor.info.pixelArraySize"] = [str(w), str(h)]
+    for key in ("android.sensor.info.activeArraySize", "android.sensor.info.preCorrectionActiveArraySize"):
+        cam[key] = ["0", "0", str(w), str(h)]
+    cam["android.jpeg.maxSize"] = [str(w * h)]
+    cam["android.sensor.info.physicalSize"] = list(spec["physical"])
+    cam["android.lens.info.availableFocalLengths"] = [spec["focal"]]
+    cam["android.lens.info.availableApertures"] = [spec["aperture"]]
+    cam["android.lens.facing"] = [spec["facing"]]
+    cam["android.sensor.orientation"] = [spec["orientation"]]
+    cam["android.info.supportedHardwareLevel"] = [spec["level"]]
+    return json.dumps(cam, indent=1).encode()
+
+
+_back = {}
+
+
+def back_camera(data):
+    _back["data"] = data
+    return pixel5_camera(data, "back")
+
+
+def front_camera(data):
+    """The emulator's front configuration is a logical camera over three
+    ultra-high-resolution physical ones; a Pixel 5 has one plain front
+    sensor, so it is made from the back configuration (FILES lists it first)"""
+    return pixel5_camera(_back["data"], "front")
 
 
 # Applied after the hash check
-TRANSFORMS = {"libvine_cam_front.so": single_front_camera}
+TRANSFORMS = {"libvine_cam_back.so": back_camera, "libvine_cam_front.so": front_camera}
 SHA256 = {
     "arm64-v8a": {
         "libvine_sensors_multihal.so": "1bd233fe6eb76a161c5f3a08ead60f10053ff3ab79f9b26b2777ded7ddf6ad15",
