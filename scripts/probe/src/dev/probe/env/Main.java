@@ -200,9 +200,20 @@ public class Main extends Activity {
         put("gl.extensions", (ext == null ? 0 : ext.split(" ").length) + " num=" + numExt[0]
                 + " angle=" + (ext != null && ext.matches("(?s).*GL_(ANGLE|CHROMIUM)_.*")));
         put("egl.vendor", EGL14.eglQueryString(d, EGL14.EGL_VENDOR));
+        StringBuilder want = new StringBuilder();
+        for (String e : new String[] {"GL_EXT_geometry_shader", "GL_OES_geometry_shader", "GL_EXT_tessellation_shader",
+                "GL_OES_tessellation_shader", "GL_EXT_gpu_shader5", "GL_OES_gpu_shader5", "GL_KHR_blend_equation_advanced",
+                "GL_OES_sample_shading", "GL_OES_texture_buffer", "GL_EXT_texture_cube_map_array"})
+            want.append(e).append(ext != null && (" " + ext + " ").contains(" " + e + " ") ? "=1 " : "=0 ");
+        put("gl.es32ext", want.toString());
         EGL14.eglMakeCurrent(d, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
         EGL14.eglDestroySurface(d, s);
         EGL14.eglDestroyContext(d, c);
+        /* What an app asking for 3.2 gets (EGL_CONTEXT_MAJOR/MINOR_VERSION_KHR) */
+        EGLContext c32 = EGL14.eglCreateContext(d, cfg[0], EGL14.EGL_NO_CONTEXT,
+                new int[] {0x3098, 3, 0x30FB, 2, EGL14.EGL_NONE}, 0);
+        put("gl.context32", c32 == null || c32 == EGL14.EGL_NO_CONTEXT ? "fail 0x" + Integer.toHexString(EGL14.eglGetError()) : "ok");
+        if (c32 != null && c32 != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(d, c32);
     }
 
     static String read(String path, int maxLines) {

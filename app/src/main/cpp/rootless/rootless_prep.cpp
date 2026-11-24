@@ -832,22 +832,53 @@ bool patch_health_hal(const std::string& R, std::string* error) {
 const char* const kAngleHidden[] = {"/vendor/lib64/egl/libEGL_mesa.so", "/vendor/lib64/egl/libGLESv1_CM_mesa.so",
                                     "/vendor/lib64/egl/libGLESv2_mesa.so"};
 
-// ANGLE caps GLES at 3.1 unless its exposeNonConformantExtensionsAndVersions
+// ANGLE caps GLES at 3.1, and leaves out the geometry and tessellation
+// shader extensions 3.2 needs, unless its exposeNonConformantExtensionsAndVersions
 // feature is on, which only an override turns on (a property or an
-// environment variable apps would see). In the image's ANGLE (arm64),
-// RendererVk::getMaxSupportedESVersion's load of that feature's flag
-// becomes `mov w8, #1`; the Vulkan limits it checks next still apply.
-// Found by its surrounding bytes, the load in the middle.
-const std::string kAngleEs32From("\x00\x00\x09\x8b\xab\xfc\x0a\x94\x88\xc2\x67\x39\xa0\x00\x00\x36\xa8\x00\x00\x35", 20);
-const std::string kAngleEs32To("\x00\x00\x09\x8b\xab\xfc\x0a\x94\x28\x00\x80\x52\xa0\x00\x00\x36\xa8\x00\x00\x35", 20);
+// environment variable apps would see). The guest's Vulkan device has what
+// 3.2 needs; with the feature on, ANGLE gives apps a real 3.2.
+// In the image's ANGLE (arm64), RendererVk::initFeatures's store of the
+// feature's `false` (strb wzr, [x25, #0xe40]) becomes a branch to a few
+// instructions in the zero padding after the executable segment, on the
+// same mapped page, that store 1 and branch back (x16 is free there).
+// Found by its surrounding bytes; the cave must still be zeros.
+const std::string kAngleFeatureSite("\x37\x83\x3a\x39\x68\x01\x08\x2a\x3f\x03\x39\x39\x08\x01\x0a\x2a", 16);
+constexpr size_t kAngleStoreAt = 8;        // within kAngleFeatureSite
+constexpr size_t kAngleCaveDelta = 0x2def48; // from the store to the cave
+// An earlier patch that only made getMaxSupportedESVersion read the
+// feature as on: ANGLE then made 3.2 contexts without 3.2's shaders
+const std::string kAngleReaderOrig("\x00\x00\x09\x8b\xab\xfc\x0a\x94\x88\xc2\x67\x39\xa0\x00\x00\x36\xa8\x00\x00\x35", 20);
+const std::string kAngleReaderPatched("\x00\x00\x09\x8b\xab\xfc\x0a\x94\x28\x00\x80\x52\xa0\x00\x00\x36\xa8\x00\x00\x35", 20);
+
+void put_u32(std::string* s, size_t at, uint32_t v) {
+    for (int i = 0; i < 4; i++) (*s)[at + i] = static_cast<char>((v >> (8 * i)) & 0xff);
+}
+
+uint32_t arm64_b(size_t from, size_t to) {
+    return 0x14000000u | (static_cast<uint32_t>((static_cast<int64_t>(to) - static_cast<int64_t>(from)) >> 2) & 0x3ffffffu);
+}
 
 bool enable_angle_es32(const std::string& path, std::string* error) {
     auto lib = read_file(path);
     if (!lib) return true;
-    const size_t at = lib->find(kAngleEs32From);
-    if (at == std::string::npos || lib->find(kAngleEs32From, at + 1) != std::string::npos) return true;
-    lib->replace(at, kAngleEs32To.size(), kAngleEs32To);
-    return write_mode(path, *lib, 0644, error);
+    bool changed = false;
+    const size_t reader = lib->find(kAngleReaderPatched);
+    if (reader != std::string::npos) {
+        lib->replace(reader, kAngleReaderOrig.size(), kAngleReaderOrig);
+        changed = true;
+    }
+    const size_t site = lib->find(kAngleFeatureSite);
+    if (site != std::string::npos && lib->find(kAngleFeatureSite, site + 1) == std::string::npos) {
+        const size_t store = site + kAngleStoreAt, cave = store + kAngleCaveDelta;
+        if (cave + 12 <= lib->size() && lib->compare(cave, 12, std::string(12, '\0')) == 0) {
+            put_u32(&*lib, cave, 0x52800030u);     // mov w16, #1
+            put_u32(&*lib, cave + 4, 0x39390330u); // strb w16, [x25, #0xe40]
+            put_u32(&*lib, cave + 8, arm64_b(cave + 8, store + 4));
+            put_u32(&*lib, store, arm64_b(store, cave));
+            changed = true;
+        }
+    }
+    return !changed || write_mode(path, *lib, 0644, error);
 }
 
 bool install_gles_shim(const std::string& R, const std::string& lib_dir, std::string* error) {
