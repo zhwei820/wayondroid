@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <asm/unistd.h>
 #include "uts.h"
+#include "device_view.h"
 #include "errno_neg.h"
 #include "io.h"
 #include "linkstore.h"
@@ -77,6 +78,7 @@ long tawcroot_uts_syscall(const tawcroot_syscall_args *a, ucontext_t *uc)
     struct names n;
     if (a->nr == TAWC_SYS_uname) {
         long rv = TAWC_RAW(TAWC_SYS_uname, a->a, 0, 0, 0, 0, 0);
+        if (!rv && session()) rv = tawcroot_device_uname((char *)(uintptr_t)a->a);
         if (rv || !session() || !load(&n)) return rv;
         char *uts = (char *)(uintptr_t)a->a;   /* kernel-validated */
         if (tawc_copy_to_guest(uts + LEN, n.host, LEN) < 0 ||

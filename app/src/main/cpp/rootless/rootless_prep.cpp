@@ -170,6 +170,20 @@ const char kCaptivePortalUrls[] =
     "cmd settings put global captive_portal_fallback_url http://wifi.vivo.com.cn/generate_204\n"
     "cmd settings put global captive_portal_other_fallback_urls http://conn1.oppomobile.com/generate_204\n";
 
+// The Bluetooth name and address a phone's settings hold, which
+// BluetoothManagerService reports while the adapter is off. Before
+// that service starts on most boots; on the first, on the next.
+std::string device_settings_sh(const std::string& bt_mac) {
+    return "#!/system/bin/sh\n"
+           "i=0\n"
+           "until cmd settings put secure bluetooth_name 'Pixel 5' 2>/dev/null; do\n"
+           "    i=$((i + 1)); [ $i -lt 300 ] || exit 1\n"
+           "    sleep 0.2\n"
+           "done\n"
+           "cmd settings put secure bluetooth_address " + bt_mac + "\n"
+           "cmd settings put secure bluetooth_addr_valid 1\n";
+}
+
 std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
     std::string rc =
         // lmkd needs PSI or memcg, both closed to apps: vine_lmkd kills
@@ -229,6 +243,7 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         // see kCaptivePortalUrls
         "on property:init.svc.zygote=running\n"
         "    exec_background - root root -- /system/bin/sh /product/etc/vine/captive_portal_urls.sh\n"
+        "    exec_background - root root -- /system/bin/sh /product/etc/vine/device_settings.sh\n"
         "\n"
         // system_server died and zygote with it: see kReapOrphans
         "on property:init.svc.zygote=restarting\n"
@@ -657,6 +672,83 @@ bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* i
     return true;
 }
 
+// tawcroot's device view (tawcroot/include/device_view.h): what apps read
+// of the Pixel 5's SoC, kernel, RAM and storage instead of the phone's.
+// Unverified on a device: the Kryo 475 silver cores' variant, the kernel's
+// build strings, MemTotal and the userdata size (a 128 GB model's).
+bool write_device_view(const std::string& store, std::string* error) {
+    const std::string D = store + "/device";
+    if (!remove_if_exists(D, error) || !mkdirs_or_fail(D, error)) return false;
+    struct Core { int first, last; const char *variant, *part, *midr; int min_khz, max_khz; };
+    // Kryo 475: six silver cores, one gold, one gold prime
+    const Core cores[] = {{0, 5, "0x7", "0x805", "0x00000000517f805e", 300000, 1804800},
+                          {6, 6, "0xf", "0x804", "0x0000000051ff804e", 652800, 2208000},
+                          {7, 7, "0xf", "0x804", "0x0000000051ff804e", 806400, 2400000}};
+    std::string cpuinfo;
+    for (const Core& c : cores) {
+        std::string related;
+        for (int i = c.first; i <= c.last; ++i) related += std::to_string(i) + (i < c.last ? " " : "\n");
+        auto put_freq = [&](const std::string& dir) {
+            const std::pair<const char*, std::string> files[] = {
+                {"cpuinfo_max_freq", std::to_string(c.max_khz)}, {"cpuinfo_min_freq", std::to_string(c.min_khz)},
+                {"scaling_max_freq", std::to_string(c.max_khz)}, {"scaling_min_freq", std::to_string(c.min_khz)},
+                {"scaling_cur_freq", std::to_string(c.max_khz)}};
+            for (const auto& [f, v] : files)
+                if (!write_mode(dir + "/" + f, v + "\n", 0644, error)) return false;
+            return write_mode(dir + "/related_cpus", related, 0644, error) &&
+                   write_mode(dir + "/affected_cpus", related, 0644, error);
+        };
+        for (int i = c.first; i <= c.last; ++i) {
+            const std::string cpu = D + "/sys-cpu/cpu" + std::to_string(i);
+            if (!mkdirs_or_fail(cpu + "/cpufreq", error) || !mkdirs_or_fail(cpu + "/regs/identification", error) ||
+                !put_freq(cpu + "/cpufreq") ||
+                !write_mode(cpu + "/regs/identification/midr_el1", std::string(c.midr) + "\n", 0644, error) ||
+                !write_mode(cpu + "/regs/identification/revidr_el1", "0x0000000000000000\n", 0644, error))
+                return false;
+            // The phone's own policy dirs, whatever cores they cover
+            const std::string policy = D + "/sys-cpu/cpufreq/policy" + std::to_string(i);
+            if (!mkdirs_or_fail(policy, error) || !put_freq(policy)) return false;
+            cpuinfo += "processor\t: " + std::to_string(i) +
+                       "\nBogoMIPS\t: 38.40\n"
+                       "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc "
+                       "dcpop asimddp\n"
+                       "CPU implementer\t: 0x51\nCPU architecture: 8\nCPU variant\t: " + c.variant +
+                       "\nCPU part\t: " + c.part + "\nCPU revision\t: 14\n\n";
+        }
+    }
+    cpuinfo += "Hardware\t: Qualcomm Technologies, Inc LITO\n";
+    return write_mode(D + "/cpuinfo", cpuinfo, 0644, error) &&
+           write_mode(D + "/uname", "4.19.282-g8b2a6e3c1f0d-ab10577962\n#1 SMP PREEMPT Mon Jul 31 19:57:23 UTC 2023\n",
+                      0644, error) &&
+           write_mode(D + "/meminfo-kb", "7612308\n", 0644, error) &&
+           // 110.5 GiB: Android reports the device's storage as the power of two above, 128 GB
+           write_mode(D + "/data-bytes", "118648471552\n", 0644, error);
+}
+
+// The Pixel 5's hardware features where Waydroid's differ: no camera
+// (none is served; declaring one that won't open is worse than none),
+// Bluetooth LE. LineageOS's TERMINFO would be in every app's environment.
+bool apply_device_features(const std::string& R, std::string* error) {
+    const std::string P = R + "/vendor/etc/permissions";
+    for (const char* f : {"/android.hardware.camera.flash-autofocus.xml", "/android.hardware.camera.front.xml",
+                          "/android.hardware.camera.full.xml", "/android.hardware.camera.raw.xml"})
+        unlink((P + f).c_str());
+    const std::pair<const char*, const char*> drop[] = {
+        {"/vendor/etc/permissions/handheld_core_hardware.xml", "    <feature name=\"android.hardware.camera\" />\n"},
+        {"/system/system_ext/etc/init/init.lineage-system_ext.rc", "    export TERMINFO /system_ext/etc/terminfo\n"},
+    };
+    for (const auto& [f, line] : drop) {
+        const auto text = read_file(R + f);
+        if (!text) continue;
+        const size_t at = text->find(line);
+        if (at != std::string::npos && !write_mode(R + f, text->substr(0, at) + text->substr(at + strlen(line)), 0644, error))
+            return false;
+    }
+    return is_directory(P) &&
+           write_mode(P + "/android.hardware.bluetooth_le.xml",
+                      "<permissions>\n    <feature name=\"android.hardware.bluetooth_le\" />\n</permissions>\n", 0644, error);
+}
+
 // Waydroid's legacy HALs that hw_get_module finds by ro.board.platform,
 // which the guest's identity sets to the Pixel 5's: named for ro.hardware,
 // looked up first, instead
@@ -870,6 +962,14 @@ DeviceIdentity guest_identity() {
     id.security_patch = "2023-09-01";
     id.soc_manufacturer = "QTI";
     id.soc_model = "SM7250";
+    // Unverified on a device: an Android 13 redfin bootloader (r3-0.5-9430389
+    // is reported with 2023 builds), the RIL's baseband, Pixels' revision form
+    id.bootloader = "r3-0.5-9430389";
+    id.baseband = "g7250-00220-221017-B-9183951";
+    id.revision = "MP1.0";
+    id.width = 1080;
+    id.height = 2340;
+    id.dpi = 440;
     id.props = {
         // Snapdragon 765G's; Waydroid's "waydroid" otherwise. Its HALs that
         // were found by it are renamed for ro.hardware (install_device_hals)
@@ -1046,9 +1146,18 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
     return out;
 }
 
+DeviceIdentity rootfs_identity(const std::string& rootfs) {
+    const auto system_prop = read_file(rootfs + "/system/build.prop");
+    if (!system_prop || system_prop->find("\nro.build.version.release=13\n") == std::string::npos) return {};
+    return guest_identity();
+}
+
 std::string guest_cmdline(const DeviceIdentity& id, const std::string& serial) {
     std::string out;
     if (!id.hardware.empty()) out += "androidboot.hardware=" + id.hardware + " ";
+    if (!id.bootloader.empty()) out += "androidboot.bootloader=" + id.bootloader + " ";
+    if (!id.baseband.empty()) out += "androidboot.baseband=" + id.baseband + " ";
+    if (!id.revision.empty()) out += "androidboot.revision=" + id.revision + " androidboot.hardware.revision=" + id.revision + " ";
     if (!serial.empty()) out += "androidboot.serialno=" + serial + " ";
     return out + "androidboot.verifiedbootstate=green androidboot.flash.locked=1 "
                  "androidboot.vbmeta.device_state=locked androidboot.veritymode=enforcing\n";
@@ -1074,6 +1183,11 @@ DeviceIds device_ids(const std::string& seed) {
     snprintf(mac, sizeof mac, "%02x:%02x:%02x:%02x:%02x:%02x", (unsigned)((m & 0xfc) | 0x02), (unsigned)(m >> 8 & 0xff),
              (unsigned)(m >> 16 & 0xff), (unsigned)(m >> 24 & 0xff), (unsigned)(m >> 32 & 0xff), (unsigned)(m >> 40 & 0xff));
     ids.mac = mac;
+    // Google's 3C:28:6D, one of the OUIs Pixels' Bluetooth addresses carry
+    m = next();
+    snprintf(mac, sizeof mac, "3C:28:6D:%02X:%02X:%02X", (unsigned)(m & 0xff), (unsigned)(m >> 8 & 0xff),
+             (unsigned)(m >> 16 & 0xff));
+    ids.bt_mac = mac;
     return ids;
 }
 
@@ -1177,9 +1291,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // A Pixel 5's identity instead of Waydroid's (apps reading Build.* or
     // the fingerprint see its Android 13 release build), for an Android 13
     // image only: on another release the identity would contradict it
-    DeviceIdentity id = guest_identity();
-    const auto system_prop = read_file(R + "/system/build.prop");
-    if (!system_prop || system_prop->find("\nro.build.version.release=13\n") == std::string::npos) id = DeviceIdentity{};
+    const DeviceIdentity id = rootfs_identity(R);
     if (!id.empty()) {
         std::vector<std::pair<std::string, std::string>> files;
         for (const char* f : {"/system/build.prop", "/system/system_ext/etc/build.prop", "/system/product/etc/build.prop",
@@ -1271,14 +1383,15 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     const std::string product_vine = R + "/system/product/etc/vine";
     if (!mkdirs_or_fail(product_vine, error) || !write_mode(product_vine + "/reap_orphans.sh", kReapOrphans, 0755, error) ||
         !write_mode(product_vine + "/check_display.sh", kCheckDisplay, 0755, error) ||
-        !write_mode(product_vine + "/captive_portal_urls.sh", kCaptivePortalUrls, 0755, error))
+        !write_mode(product_vine + "/captive_portal_urls.sh", kCaptivePortalUrls, 0755, error) ||
+        !write_mode(product_vine + "/device_settings.sh", device_settings_sh(ids.bt_mac), 0755, error))
         return false;
     bool radio = false;
     if (!install_radio_hal(R, o.lib_dir, &radio, error)) return false;
     // Mobile data off by default: vine_modem fails data calls, and the
     // RIL sets its data interface down when one ends, which may be wlan0
     if (!write_mode(R + "/vendor/waydroid.prop",
-                    waydroid_prop(o.dpi, o.gpu) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
+                    waydroid_prop(id.dpi ? id.dpi : o.dpi, o.gpu) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
         return false;
     // gralloc reads ro.vendor.display.gpu in every app, and tawcroot denies
     // apps the vendor_default_prop area that "ro.vendor." falls in
@@ -1306,6 +1419,12 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.redfin.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
+    if (!id.empty() && !apply_device_features(R, error)) return false;
+    if (id.empty() ? !remove_if_exists(l.store + "/device", error) : !write_device_view(l.store, error)) return false;
+    // The guest's /sys/class/power_supply, which VineVMManager fills from
+    // the phone's battery
+    if (!mkdirs_or_fail(l.work + "/power_supply", error) || chmod((l.work + "/power_supply").c_str(), 0755) != 0)
+        return fail_errno(error, "chmod power_supply");
     if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) ||
         !write_mode(l.store + "/app-hidden", app_hidden_list(R), 0644, error) ||
         !std::all_of(std::begin(kPatchedJars), std::end(kPatchedJars),

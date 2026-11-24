@@ -308,6 +308,12 @@ bool Instance::launch_services(std::string* error) {
     const std::string lib = cfg_.lib_dir + "/";
     const std::string& W = layout_.work;
     // Paths relative to W: the app data dir leaves no room in sun_path
+    // The identity's panel, not the phone's: apps read the screen's size
+    const DeviceIdentity id = rootfs_identity(layout_.rootfs);
+    if (id.width > 0 && id.height > 0) {
+        cfg_.width = id.width;
+        cfg_.height = id.height;
+    }
     binderd_pid_ = spawn({lib + "libbinderd.so", "binderfs"}, W, layout_.logs + "/binderd.log");
     wl_pid_ = spawn({lib + "libvine_wl.so", "--socket", "run/wayland-0", "--vinefb", layout_.vinefb, "--create",
                      std::to_string(cfg_.width) + "x" + std::to_string(cfg_.height), "--input", "input",
@@ -350,7 +356,7 @@ static std::vector<std::string> binds(const Layout& l) {
     for (const auto& b : std::vector<std::string>{
              l.binderfs + ":/dev/binderfs", l.data + ":/data", "/proc:/proc", "/sys:/sys", "/dev/null:/dev/null",
              "/dev/zero:/dev/zero", "/dev/random:/dev/random", "/dev/urandom:/dev/urandom", "/dev/ptmx:/dev/ptmx",
-             "/dev/pts:/dev/pts", l.run + ":/run/user/1000"}) {
+             "/dev/pts:/dev/pts", l.run + ":/run/user/1000", l.work + "/power_supply:/sys/class/power_supply"}) {
         out.push_back("-b");
         out.push_back(b);
     }

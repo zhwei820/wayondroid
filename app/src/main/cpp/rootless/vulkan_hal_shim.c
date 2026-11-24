@@ -16,6 +16,10 @@
 #define DEVICE_NAME "Adreno (TM) 620"
 #define DEVICE_ID 0x06020001u
 #define DRIVER_NAME "Qualcomm Technologies Inc. Adreno Vulkan Driver"
+/* Adreno's form, not Mesa's (gfxstream reports its Mesa release, which
+ * ANGLE puts in GL_RENDERER). Unverified: the release Pixel 5's A13 ships */
+#define DRIVER_VERSION VK_MAKE_VERSION(512, 530, 0)
+#define DRIVER_INFO "Driver Build: 7d8a5d1cd0, I9a9f0b7e8b, 1683677478\nDate: 05/09/23\nCompiler Version: E031.41.03.36\nDriver Branch: \n"
 
 /* hardware/hardware.h and hardware/hwvulkan.h, which the NDK lacks */
 struct hw_module_t;
@@ -61,15 +65,22 @@ static void rename_device(VkPhysicalDeviceProperties* p)
 {
     strncpy(p->deviceName, DEVICE_NAME, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE);
     p->deviceID = DEVICE_ID;
+    p->driverVersion = DRIVER_VERSION;
 }
 
 static void rename_driver(void* next)
 {
     for (VkBaseOutStructure* s = next; s; s = s->pNext) {
         if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES) {
-            strncpy(((VkPhysicalDeviceDriverProperties*)s)->driverName, DRIVER_NAME, VK_MAX_DRIVER_NAME_SIZE);
+            VkPhysicalDeviceDriverProperties* d = (VkPhysicalDeviceDriverProperties*)s;
+            d->driverID = VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
+            strncpy(d->driverName, DRIVER_NAME, VK_MAX_DRIVER_NAME_SIZE);
+            strncpy(d->driverInfo, DRIVER_INFO, VK_MAX_DRIVER_INFO_SIZE);
         } else if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES) {
-            strncpy(((VkPhysicalDeviceVulkan12Properties*)s)->driverName, DRIVER_NAME, VK_MAX_DRIVER_NAME_SIZE);
+            VkPhysicalDeviceVulkan12Properties* d = (VkPhysicalDeviceVulkan12Properties*)s;
+            d->driverID = VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
+            strncpy(d->driverName, DRIVER_NAME, VK_MAX_DRIVER_NAME_SIZE);
+            strncpy(d->driverInfo, DRIVER_INFO, VK_MAX_DRIVER_INFO_SIZE);
         }
     }
 }

@@ -1,10 +1,13 @@
 package com.hexadecinull.vineos.domain
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
+import android.os.BatteryManager
 import android.os.Build
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
@@ -144,6 +147,21 @@ class VineVMManager @Inject constructor(
     val helperState: StateFlow<HelperState> = helper.state
     val snapshotEvents: SharedFlow<SnapshotEvent> = snapshotEventFlow.asSharedFlow()
 
+    // Declared before init, which registers it
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) = publishBattery(intent)
+    }
+
+    // The phone's battery is the guest's (GuestBattery); a started instance has it by healthd's next poll
+    private fun publishBattery(intent: Intent) {
+        scope.launch {
+            val current = runCatching {
+                context.getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+            }.getOrDefault(0).takeIf { it != Int.MIN_VALUE } ?: 0
+            GuestBattery.publish(provisioner.instancesDir, intent, current)
+        }
+    }
+
     init {
         scope.launch { instanceRepo.resetAllStatuses() }
         scope.launch { for ((id, status) in persistQueue) runCatching { instanceRepo.updateStatus(id, status) } }
@@ -151,6 +169,8 @@ class VineVMManager @Inject constructor(
         scope.launch { rootlessHelper.events.collect { onHelperEvent(it, rootless = true) } }
         scope.launch { emptyTrash() }
         runCatching { context.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback) }
+        ContextCompat.registerReceiver(context, batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+            ?.let(::publishBattery)
     }
 
     // System-as-root images (Waydroid, no ramdisk) boot on the rootless engine, the others need root
@@ -225,6 +245,9 @@ class VineVMManager @Inject constructor(
             timeoutMs = 120_000,
         )
         if (!reply.ok) fail(instance.id, reply.payload.ifBlank { "The instance could not be started" })
+        // healthd lists the power supplies once, early in the boot: a new instance's must be there by then
+        else ContextCompat.registerReceiver(context, null, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+            ?.let(::publishBattery)
     }
 
     fun stopInstance(instance: VMInstance) {

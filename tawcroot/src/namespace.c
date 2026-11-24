@@ -25,6 +25,7 @@
 #include "tawc_string.h"
 #include "tawc_uapi.h"
 #include "usercopy.h"
+#include "device_view.h"
 
 #define NS_FLAGS (CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET)
 struct tawc_namespace tawcroot_namespace;
@@ -364,6 +365,7 @@ long tawcroot_namespace_proc_open(const char *path, int flags)
     in[len] = 0;
     size_t m = status ? rewrite_status(in, out, TAWCROOT_PATH_SCRATCH_SIZE, pid)
                       : rewrite_stat(in, out, TAWCROOT_PATH_SCRATCH_SIZE, pid);
+    if (status) m = tawcroot_device_status(out, m, TAWCROOT_PATH_SCRATCH_SIZE);
     /* The name carries the file, for readlink of the fd (memfd_link_target) */
     char name[64] = "tawcroot-proc:";
     size_t nn = 14;
@@ -436,7 +438,7 @@ long tawcroot_namespace_init_session(void)
      * there. Emulated like a user namespace's (namespace_cap). */
     struct tawc_namespace *ns = &tawcroot_namespace;
     static const int init_lazy[] = { TAWC_SYS_fstatfs, TAWC_SYS_uname, __NR_sethostname, __NR_setdomainname,
-                                     __NR_setrlimit, __NR_prlimit64 };
+                                     __NR_setrlimit, __NR_prlimit64, __NR_sysinfo };
     r = tawcroot_install_lazy_filter(init_lazy, sizeof init_lazy / sizeof init_lazy[0]);
     if (r) return r;
     ns->session |= TAWC_NS_INIT_SESSION;
@@ -979,6 +981,7 @@ void tawcroot_namespace_register(void)
     tawcroot_dispatch_install_lazy(TAWC_SYS_fstatfs, tawcroot_mounts_fstatfs);
     tawcroot_dispatch_install_lazy(__NR_rt_tgsigqueueinfo, namespace_signal);
     tawcroot_dispatch_install_lazy(TAWC_SYS_uname, tawcroot_uts_syscall);
+    tawcroot_dispatch_install_lazy(__NR_sysinfo, tawcroot_device_sysinfo);
     tawcroot_dispatch_install_lazy(__NR_sethostname, tawcroot_uts_syscall);
     tawcroot_dispatch_install_lazy(__NR_setdomainname, tawcroot_uts_syscall);
     tawcroot_dispatch_install_lazy(TAWC_SYS_recvfrom, tawcroot_ports_recv);

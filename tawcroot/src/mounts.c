@@ -32,6 +32,7 @@
 #include "sysnr.h"
 #include "tawc_string.h"
 #include "usercopy.h"
+#include "device_view.h"
 
 #define MAX_MOUNTS 64
 #define MAGIC 0x4d4e5431
@@ -865,6 +866,7 @@ long tawcroot_mounts_fstatfs(const tawcroot_syscall_args *a, ucontext_t *uc)
         long m = tawcroot_mounts_magic(b->src_fd);
         if (m) out[0] = m;
     }
+    tawcroot_device_statfs(out);
     return 0;
 }
 

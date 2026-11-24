@@ -61,6 +61,7 @@
 #include "tawc_string.h"
 #include "tawc_uapi.h"
 #include "usercopy.h"
+#include "device_view.h"
 
 /* Classify an already-fetched local path as a `/dev/shm` intercept.
  *   NONE — not shm (fall through to normal translation)
@@ -294,6 +295,10 @@ static long handle_openat(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (cgroup_on()) {
 		long cg = tawcroot_cgroup_proc_open(path, flags);
 		if (cg != TAWC_ENOSYS) return cg;
+	}
+	if (tawcroot_namespace.init_pid) {
+		pf = tawcroot_device_open(path, flags);
+		if (pf != TAWC_ENOSYS) return pf;
 	}
 
 	/* /proc/self/maps and /proc/<our-pid>/maps: synthesize a shadow fd
@@ -3089,6 +3094,8 @@ static long handle_statfs(const tawcroot_syscall_args *args, ucontext_t *uc)
 	if (cgroup_on() &&
 	    tawcroot_cgroup_locate(t.fd, t.path, scratch->buf[3], TAWCROOT_PATH_SCRATCH_SIZE))
 		local.f_type = TAWCROOT_CGROUP2_SUPER_MAGIC;
+	if (tawcroot_namespace.session & TAWC_NS_INIT_SESSION)
+		tawcroot_device_statfs((long *)&local);
 	long ce = tawc_copy_to_guest(out, &local, sizeof local);
 	return ce < 0 ? ce : 0;
 }

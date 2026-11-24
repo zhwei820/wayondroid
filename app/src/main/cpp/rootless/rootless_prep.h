@@ -52,6 +52,10 @@ struct DeviceIdentity {
     std::string brand, manufacturer, model, name, device, board, hardware;
     std::string build_id, incremental, fingerprint, description, flavor, build_host, build_product;
     std::string date, date_utc, security_patch, soc_manufacturer, soc_model;
+    // androidboot.* the bootloader passes: ro.bootloader, ro.baseband, ro.revision
+    std::string bootloader, baseband, revision;
+    // The panel: the guest's screen is this size whatever the phone's
+    int width = 0, height = 0, dpi = 0;
     // The device's own build.prop lines, exact; they win over the fields
     std::vector<std::pair<std::string, std::string>> props;
     bool empty() const { return brand.empty() || model.empty() || device.empty(); }
@@ -63,6 +67,10 @@ struct DeviceIdentity {
 // build.props (redfin TQ3A.230901.001.C2).
 DeviceIdentity guest_identity();
 
+// guest_identity(), or none when the extracted image at `rootfs` is not
+// the Android release it describes
+DeviceIdentity rootfs_identity(const std::string& rootfs);
+
 // A build.prop presenting `id` as a release build: every partition's
 // product, build id, fingerprint, dates and patch level, release-keys
 // tags, user type, not debuggable and adb off, keeping the image's
@@ -71,8 +79,8 @@ DeviceIdentity guest_identity();
 std::string props_device(const std::string& build_prop, const DeviceIdentity& id);
 
 // /proc/cmdline as the guest's init reads it (through tawcroot, from
-// <store>/cmdline): ro.hardware, ro.serialno (when given) and a locked,
-// verified boot
+// <store>/cmdline): ro.hardware, ro.serialno (when given), the
+// bootloader, baseband and revision, and a locked, verified boot
 std::string guest_cmdline(const DeviceIdentity& id, const std::string& serial = "");
 
 // The identifiers that tell one phone from another, made from
@@ -81,6 +89,7 @@ std::string guest_cmdline(const DeviceIdentity& id, const std::string& serial = 
 struct DeviceIds {
     std::string serial; // ro.serialno, a Pixel's 14 characters
     std::string mac;    // the fake wlan0's, aa:bb:cc:dd:ee:ff, locally administered as Android's randomized ones are
+    std::string bt_mac; // the Bluetooth address, AA:BB:CC:DD:EE:FF
 };
 DeviceIds device_ids(const std::string& seed);
 
