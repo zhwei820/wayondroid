@@ -37,6 +37,7 @@
 #include "tawc_string.h"
 #include "tawc_uapi.h"
 #include "usercopy.h"
+#include "app_hidden.h"
 
 int    tawcroot_reserved_fds[TAWCROOT_MAX_RESERVED_FDS];
 size_t tawcroot_n_reserved_fds;
@@ -462,6 +463,21 @@ static long handle_getdents64(const tawcroot_syscall_args *args,
 		return n;
 	unsigned long pdev = proc_dev();
 	if (pdev && (unsigned long)dst.st_dev != pdev) {
+		/* An app's listing leaves out what app_hidden.h hides; a
+		 * batch filtered to nothing is not the end of the directory */
+		if (tawcroot_guest_is_app()) {
+			TAWCROOT_PATH_SCRATCH_AUTO(hs);
+			long al = tawcroot_fd_to_guest_abs(fd, hs->buf[0], TAWCROOT_PATH_SCRATCH_SIZE);
+			if (al > 0) {
+				hs->buf[0][al] = 0;
+				for (;;) {
+					long kept = tawcroot_app_hidden_filter(hs->buf[0], buf, n);
+					if (kept > 0) { n = kept; break; }
+					n = TAWC_RAW(TAWC_SYS_getdents64, fd, (long)buf, (long)count, 0, 0, 0);
+					if (n <= 0) return n;
+				}
+			}
+		}
 		if (tawcroot_store_link_fd >= 0 && tawcroot_store_dev &&
 		    (unsigned long)dst.st_dev == tawcroot_store_dev)
 			return tawcroot_dirent_filter_delink_types(buf, n);

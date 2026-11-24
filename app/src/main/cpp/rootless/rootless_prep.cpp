@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -646,6 +647,57 @@ bool remove_foreign_apps(const std::string& R, std::string* error) {
     return true;
 }
 
+// Files and directories that name Waydroid, LineageOS, the emulator or
+// the engine: tawcroot's <store>/app-hidden (tawcroot/include/app_hidden.h),
+// which apps see as absent. Kept visible: what app processes load or
+// read (framework jars and resources, installed apps and overlays, APEXes,
+// libraries but those only services load).
+bool marked_name(const std::string& name) {
+    std::string n = name;
+    for (char& c : n) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    for (const char* m : {"waydroid", "lineage", "vine", "goldfish", "ranchu", "cuttlefish", "gfxstream", "anbox", "qemu"}) {
+        if (n.find(m) != std::string::npos) return true;
+    }
+    return false;
+}
+
+void collect_hidden(const std::string& R, const std::string& dir, int depth, std::vector<std::string>* out) {
+    DIR* d = opendir((R + dir).c_str());
+    if (!d) return;
+    const bool libs = dir.size() >= 4 && (dir.compare(dir.size() - 4, 4, "/lib") == 0 ||
+                                          (dir.size() >= 6 && dir.compare(dir.size() - 6, 6, "/lib64") == 0));
+    while (dirent* e = readdir(d)) {
+        const std::string name = e->d_name;
+        if (name == "." || name == "..") continue;
+        const std::string path = dir + "/" + name;
+        struct stat st {};
+        if (lstat((R + path).c_str(), &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (name == "app" || name == "priv-app" || name == "overlay" || name == "framework" || name == "apex") continue;
+            if (marked_name(name)) out->push_back(path);
+            else if (depth < 6) collect_hidden(R, path, depth + 1, out);
+        } else if (libs ? name.rfind("libvine_", 0) == 0 || name.rfind("libcuttlefish_", 0) == 0 : marked_name(name)) {
+            out->push_back(path);
+        }
+    }
+    closedir(d);
+}
+
+std::string app_hidden_list(const std::string& R) {
+    std::vector<std::string> paths;
+    collect_hidden(R, "/system", 0, &paths);
+    collect_hidden(R, "/vendor", 0, &paths);
+    std::string out;
+    for (const std::string& p : paths) {
+        out += p + "\n";
+        // $R/product and $R/system_ext are symlinks into system
+        for (const char* part : {"/system/product/", "/system/system_ext/"}) {
+            if (p.rfind(part, 0) == 0) out += p.substr(7) + "\n";
+        }
+    }
+    return out;
+}
+
 // Properties that name LineageOS or Waydroid, in vendor_default_prop:
 // tawcroot denies apps that area, the guest's services keep reading them
 const char kHiddenPropContexts[] =
@@ -1100,7 +1152,9 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.redfin.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
-    if (!install_device_hals(R, error) || !remove_foreign_apps(R, error)) return false;
+    if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) ||
+        !write_mode(l.store + "/app-hidden", app_hidden_list(R), 0644, error))
+        return false;
     // scripts/radio/build-overlay.sh: EthernetTracker takes tawcroot's wlan0
     // and reports it as Wi-Fi, which is how a phone without a SIM is online.
     // Without it wlan0 matches no interface regex and the guest is offline.

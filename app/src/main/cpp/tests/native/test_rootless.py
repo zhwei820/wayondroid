@@ -183,6 +183,9 @@ def build_images(top, inst, audio_hal_class=1, sensors_libs=True, radio_libs=Tru
     open(os.path.join(vend, "lib64/hw/hwcomposer.waydroid.so"), "w").write("hwc\n")
     os.makedirs(os.path.join(vend, "etc/selinux"), exist_ok=True)
     open(os.path.join(vend, "etc/selinux/vendor_property_contexts"), "w").write("ro.hardware. u:object_r:vendor_default_prop:s0\n")
+    open(os.path.join(sysd, "system/etc/init/init.waydroid.rc"), "w").write("on boot\n")
+    os.makedirs(os.path.join(sysd, "system/product/app/Jelly"), exist_ok=True)
+    open(os.path.join(sysd, "system/product/app/Jelly/Jelly.lineage.apk"), "w").write("jelly\n")
     os.makedirs(os.path.join(sysd, "system/product/app/Etar"), exist_ok=True)
     open(os.path.join(sysd, "system/product/app/Etar/Etar.apk"), "w").write("etar\n")
     if radio_libs:  # the image's radio@1.0 and 1.1, which the RIL uses with the emulator's newer ones
@@ -353,6 +356,10 @@ def main():
     check(read(os.path.join(R, "vendor/lib64/hw/hwcomposer.redfin.so")) == "hwc\n" and
           not os.path.exists(os.path.join(R, "vendor/lib64/hw/hwcomposer.waydroid.so")), "HAL found by ro.hardware")
     check(not os.path.exists(os.path.join(R, "system/product/app/Etar")), "Lineage apps removed")
+    hidden = read(os.path.join(W, "tawcroot/app-hidden")).split("\n")
+    check("/system/etc/init/init.waydroid.rc" in hidden and "/system/product/etc/vine" in hidden and
+          "/product/etc/vine" in hidden and "/vendor/lib64/hw/hwcomposer.redfin.so" not in hidden and
+          not any("Jelly" in p for p in hidden), "Waydroid's files hidden from apps: " + str(hidden))
     ctx = read(os.path.join(R, "vendor/etc/selinux/vendor_property_contexts"))
     check(ctx.startswith("ro.hardware. ") and ctx.count("\nwaydroid. ") == 1 and "\nro.lineage. " in ctx and
           ctx.count("\nro.vendor.display.gpu ") == 1, "Waydroid and Lineage props hidden from apps: " + ctx)

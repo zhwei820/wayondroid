@@ -162,6 +162,7 @@ PROD_C := \
     $(SRC_T)/src/fastpath.c \
     $(SRC_T)/src/stats.c \
     $(SRC_T)/src/proc_rewrite.c \
+    $(SRC_T)/src/app_hidden.c \
     $(SRC_T)/src/proc_shadow.c \
     $(SRC_T)/src/identity.c \
     $(SRC_T)/src/syscalls_fs.c \

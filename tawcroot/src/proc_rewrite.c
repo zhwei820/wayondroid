@@ -170,6 +170,27 @@ static long out_write(char *out, size_t out_cap, size_t *off,
  * outside the guest's view: the whole rootfs lives under the app's data
  * dir, and hiding its files would hide the guest's own libc and APKs
  * (security SDKs then call the app tampered with). */
+/* Shared memory of ours that a guest process maps, shown as what a
+ * phone's process maps in its place: binder's buffer (our binder is
+ * memfd-backed) and the GPU's ring buffers (gfxstream's guest driver
+ * names its memfds), a Qualcomm GPU's device. Without " (deleted)":
+ * these are device nodes. */
+static const char *maps_alias(const char *p, size_t n)
+{
+	static const char *const alias[][2] = {
+		{ "/memfd:tawc-binder", "/dev/binderfs/binder" },
+		{ "/memfd:gfxstream", "/dev/kgsl-3d0" },
+	};
+	for (size_t a = 0; a < sizeof alias / sizeof alias[0]; a++) {
+		size_t k = 0;
+		while (alias[a][0][k]) k++;
+		size_t j = 0;
+		while (j < k && j < n && p[j] == alias[a][0][j]) j++;
+		if (j == k) return alias[a][1];
+	}
+	return 0;
+}
+
 static int maps_line_hidden(const char *p, size_t n)
 {
 	static const char *const marks[] = { "tawcroot", "com.hexadecinull.vineos", "libvine_" };
@@ -214,6 +235,17 @@ long tawcroot_proc_maps_rewrite(
 		 *   - starts with '/' → real path, try reverse-translate
 		 *   - anything else → emit verbatim (defensive) */
 		const char *p = line + path_off;
+		const char *alias = maps_alias(p, path_len);
+		if (alias) {
+			long e = out_write(out, out_cap, &out_off, line, path_off);
+			size_t k = 0;
+			while (alias[k]) k++;
+			if (e >= 0) e = out_write(out, out_cap, &out_off, alias, k);
+			if (e >= 0 && has_nl) e = out_write(out, out_cap, &out_off, "\n", 1);
+			if (e < 0) return e;
+			i = has_nl ? line_end + 1 : line_end;
+			continue;
+		}
 		int do_rewrite = (path_len > 0 && p[0] == '/');
 		size_t plen = do_rewrite ? split_deleted_tag(p, path_len) : path_len;
 		long   rl   = do_rewrite ? tawcroot_proc_reverse_translate_path(

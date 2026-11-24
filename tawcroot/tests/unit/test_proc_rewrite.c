@@ -295,6 +295,27 @@ test(maps_preserves_deleted_tag)
 		"7f1234567000-7f1234589000 r--p 00000000 08:01 999 /tmp/scratch (deleted)\n");
 }
 
+test(maps_aliases_binder_and_gpu_memfds)
+{
+	tawcroot_proc_rewrite_ctx ctx = {
+		.rootfs_host_path     = "/data/rootfs",
+		.rootfs_host_path_len = 12,
+		.binds                = nullptr,
+		.n_binds              = 0,
+	};
+	const char in[] =
+		"7f0000000000-7f0000100000 r--p 00000000 00:01 11 /memfd:tawc-binder-stage (deleted)\n"
+		"7f0000100000-7f0000200000 rw-s 00000000 00:01 12 /memfd:gfxstream-ringblob-shmem-2288 (deleted)\n";
+	char out[512];
+	long n = tawcroot_proc_maps_rewrite(&ctx, in, strlen(in),
+					    out, sizeof out);
+	test_int_eq(n > 0, 1);
+	out[n] = 0;
+	test_str_eq(out,
+		"7f0000000000-7f0000100000 r--p 00000000 00:01 11 /dev/binderfs/binder\n"
+		"7f0000100000-7f0000200000 rw-s 00000000 00:01 12 /dev/kgsl-3d0\n");
+}
+
 test(maps_host_prefix_containing_paren_space_still_translates)
 {
 	/* A rootfs host prefix containing " (" used to trip the tag-split

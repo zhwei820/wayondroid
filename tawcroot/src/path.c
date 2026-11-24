@@ -48,6 +48,7 @@
 #include "rescue.h"
 #include "sysnr.h"
 #include "tawc_string.h"
+#include "app_hidden.h"
 #include "tawc_uapi.h"
 #include "usercopy.h"
 
@@ -1056,6 +1057,10 @@ static tawcroot_path_result path_translate(const char *guest_path,
 tawcroot_path_result tawcroot_path_translate(const char *path, char *out,
 		size_t cap, tawcroot_path_mode mode, tawcroot_path_intent intent)
 {
+	if (tawcroot_app_hidden(path)) {
+		tawcroot_path_result r = { -1, TAWC_ENOENT, 0 };
+		return r;
+	}
 	return path_translate(path, out, cap, mode, intent, 0);
 }
 

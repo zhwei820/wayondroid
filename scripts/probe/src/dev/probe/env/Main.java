@@ -187,6 +187,19 @@ public class Main extends Activity {
             put("file." + f, new File(f).exists());
         }
         put("proc.tty.drivers", grep(read("/proc/tty/drivers", 100), "goldfish|virtio|ttyS"));
+        for (String d : new String[] {"/", "/system", "/system/bin", "/system/bin/hw", "/system/etc/init", "/system/lib64",
+                "/system/addon.d", "/vendor", "/vendor/bin/hw", "/vendor/etc/init", "/vendor/lib64", "/vendor/lib64/hw",
+                "/product/etc", "/product/etc/init", "/product/etc/permissions", "/system_ext/etc/init",
+                "/system_ext/etc/permissions", "/vendor/etc/permissions", "/vendor/etc/vintf/manifest"}) {
+            String[] names = new File(d).list();
+            StringBuilder m = new StringBuilder();
+            for (String n : names == null ? new String[0] : names) if (MARK.matcher(n).find()) m.append(n).append(' ');
+            put("ls." + d, names == null ? "unreadable" : names.length + " entries " + m);
+        }
+        for (String f : new String[] {"/vendor/waydroid.prop", "/system/etc/init/init.waydroid.rc", "/product/etc/vine",
+                "/system/bin/vine_lmkd", "/vendor/lib64/libcuttlefish_fs.so", "/system/addon.d/50-lineage.sh"}) {
+            put("exists." + f, new File(f).exists());
+        }
         put("proc.self.maps.marks", grep(read("/proc/self/maps", 5000), MARK.pattern()));
     }
 

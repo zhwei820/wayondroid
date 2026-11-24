@@ -11,15 +11,15 @@
 
 namespace vine {
 
-void LineServer::write_out(const std::string& line) {
+void LineServer::write_out(int fd, const std::string& line) {
     const std::string msg = line + "\n";
     const char* p = msg.data();
     size_t left = msg.size();
     while (left > 0) {
-        const ssize_t n = write(out_fd_, p, left);
+        const ssize_t n = write(fd, p, left);
         if (n < 0) {
             if (errno == EINTR) continue;
-            if (!in_debug_) quit_ = true; // the app is gone
+            if (fd == app_fd_) quit_ = true; // the app is gone
             return;
         }
         p += n;
@@ -29,13 +29,13 @@ void LineServer::write_out(const std::string& line) {
 
 void LineServer::reply(const std::string& id, bool ok, const std::string& payload) {
     if (id == "-") return;
-    write_out(id + "\t" + (ok ? "ok" : "err") + "\t" + escape_line(payload));
+    write_out(out_fd_, id + "\t" + (ok ? "ok" : "err") + "\t" + escape_line(payload));
 }
 
 void LineServer::emit(const std::string& event, const std::vector<std::string>& fields) {
     std::string line = "*\t" + event;
     for (const auto& f : fields) line += "\t" + escape_line(f);
-    write_out(line);
+    write_out(app_fd_, line);
 }
 
 void LineServer::handle_line(const std::string& line) {
@@ -76,9 +76,7 @@ void LineServer::serve_debug() {
     while (line.size() < 65536 && read(c, &ch, 1) == 1 && ch != '\n') line += ch;
     const int saved = out_fd_;
     out_fd_ = c;
-    in_debug_ = true;
     if (!line.empty()) handle_line(line);
-    in_debug_ = false;
     out_fd_ = saved;
     close(c);
 }
@@ -101,7 +99,7 @@ int line_server_send(const std::string& path, const std::vector<std::string>& re
     char buf[65536];
     for (ssize_t n; (n = read(fd, buf, sizeof buf)) > 0;) reply.append(buf, (size_t)n);
     close(fd);
-    // "d ok|err payload", then any events the request caused
+    // "d ok|err payload"
     bool ok = false;
     for (const auto& l : split_lines(reply)) {
         const auto f = split_fields(l, '\t');

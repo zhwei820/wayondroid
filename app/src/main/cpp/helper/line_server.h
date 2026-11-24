@@ -10,14 +10,15 @@ namespace vine {
 // ("* name fields...") on out_fd. See HelperProtocol.kt.
 class LineServer {
 public:
-    LineServer(int in_fd, int out_fd) : in_fd_(in_fd), out_fd_(out_fd) {}
+    LineServer(int in_fd, int out_fd) : in_fd_(in_fd), out_fd_(out_fd), app_fd_(out_fd) {}
     virtual ~LineServer() = default;
 
     // Serves requests until stdin closes or "quit" arrives, then calls shutdown()
     int run();
 
     // Also takes requests on a unix socket (debug builds: adb run-as can
-    // drive the engine as the app). Replies go back on that connection.
+    // drive the engine as the app). Replies go back on that connection;
+    // events still go to the app, which tracks instance state from them.
     bool listen_debug(const std::string& path, std::string* error);
 
 protected:
@@ -32,15 +33,15 @@ protected:
 
 private:
     void handle_line(const std::string& line);
-    void write_out(const std::string& line);
+    void write_out(int fd, const std::string& line);
     void serve_debug();
 
     int in_fd_;
-    int out_fd_;
+    int out_fd_; // where replies go: the app, or the debug connection being served
+    const int app_fd_;
     std::string inbox_;
     bool quit_ = false;
     int debug_fd_ = -1;
-    bool in_debug_ = false;
 };
 
 // Sends one request line to a server's debug socket and prints the reply
