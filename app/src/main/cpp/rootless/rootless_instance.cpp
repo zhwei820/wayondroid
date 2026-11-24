@@ -334,7 +334,7 @@ bool Instance::launch_services(std::string* error) {
     }
     // The guest's GPU and gralloc service, its sockets in /run/user/1000
     if (cfg_.gpu) {
-        kumquat_pid_ = spawn({lib + "libvine_kumquat.so", "kumquat-gpu-0", "vine-gralloc",
+        kumquat_pid_ = spawn({lib + "libvine_kumquat.so", "kumquat-gpu-0", "gralloc-0",
                               vine::display::gpu_ahb_socket(layout_.vinefb)}, layout_.run,
                              layout_.logs + "/vine_kumquat.log");
     }

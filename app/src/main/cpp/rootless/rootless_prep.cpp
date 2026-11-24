@@ -199,21 +199,16 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         "    oneshot\n"
         "    override\n"
         "\n"
-        // llvmpipe rasterizes in the drawing thread: with its own
-        // rasterizer threads, now and then one runs a shader whose JIT
-        // code was already released (SEGV_ACCERR in llvmpipe-N), which
-        // takes SurfaceFlinger or an app down
         "on early-init\n"
-        "    export LP_NUM_THREADS 0\n"
         // The audio HAL's libpulse takes PULSE_RUNTIME_PATH only when it
         // is its own and 0700, or it never connects to vine_pulse
         "    chown audioserver audio /run/user/1000/pulse\n"
         "    chmod 0700 /run/user/1000/pulse\n";
-    if (gpu) {
-        // gfxstream-vk talks to vine_kumquat over kumquat's socket
-        rc += "    export VIRTGPU_KUMQUAT 1\n"
-              "    export VIRTGPU_KUMQUAT_GPU_SOCKET /run/user/1000/kumquat-gpu-0\n";
-    }
+    // Without the GPU: llvmpipe rasterizes in the drawing thread. With its
+    // own rasterizer threads, now and then one runs a shader whose JIT code
+    // was already released (SEGV_ACCERR in llvmpipe-N), which takes
+    // SurfaceFlinger or an app down. Only then: apps see the environment.
+    if (!gpu) rc += "    export LP_NUM_THREADS 0\n";
     rc += "\n"
         // Emulated storage without FUSE (libvine_vold_shim fakes vold's
         // FUSE mount): /data/media where FUSE and its pass-through would
@@ -478,6 +473,13 @@ const std::pair<const char*, const char*> kVulkanStrings[] = {
     {"gfxstream", "Adreno"},
     {"Mesa " "25.3.6 (git-06f9e28304)", ""},
     {"Goldfish GFXStream", ""},
+    // Its server, found without environment variables apps would see:
+    // set in every process instead of VIRTGPU_KUMQUAT, no override of the
+    // socket path, and the default one (17 characters, "0" appended) a
+    // link in /dev/socket (prepare_rootfs)
+    {"VIRTGPU_KUMQUAT", "ANDROID_ROOT"},
+    {"VIRTGPU_KUMQUAT_GPU_SOCKET", ""},
+    {"/tmp/kumquat-gpu-", "/dev/socket/kgsl-"},
     // The SONAME, which dlopen(RTLD_NOLOAD) finds the loaded driver by;
     // the HAL in front of it (vulkan_hal_shim.c) is vulkan.adreno.so
     {"libvulkan_gfxstream.so", "libadreno_utils.so"},
@@ -729,7 +731,8 @@ std::string app_hidden_list(const std::string& R) {
     std::vector<std::string> paths;
     collect_hidden(R, "/system", 0, &paths);
     collect_hidden(R, "/vendor", 0, &paths);
-    std::string out = "/.tawcroot-tcp-v1\n";
+    // The engine's own: tawcroot's port table and its runtime directory
+    std::string out = "/.tawcroot-tcp-v1\n/run\n";
     for (const std::string& p : paths) {
         out += p + "\n";
         // $R/product and $R/system_ext are symlinks into system
@@ -1350,6 +1353,12 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     for (const char* d : {"/dev/socket", "/dev/pts", "/dev/input", "/mnt/vendor", "/mnt/product", "/run/user/1000"}) {
         if (!mkdirs_or_fail(R + d, error)) return false;
     }
+    // vine_kumquat's sockets where apps' GPU drivers find them (/run, the
+    // engine's, is hidden from apps): gfxstream-vk's default path
+    // (kVulkanStrings) and gralloc_gpu.c's
+    if (!symlink_over("/run/user/1000/kumquat-gpu-0", R + "/dev/socket/kgsl-0", error) ||
+        !symlink_over("/run/user/1000/gralloc-0", R + "/dev/socket/gralloc", error))
+        return false;
     return mkdirs_or_fail(l.run + "/pulse", error);
 }
 

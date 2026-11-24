@@ -20,7 +20,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define SOCKET_PATH "/run/user/1000/vine-gralloc"
+/* A link to vine_kumquat's gralloc-0 (rootless_prep.cpp): apps see no /run */
+#define SOCKET_PATH "/dev/socket/gralloc"
 
 /* hardware/graphics.h */
 #define FMT_RGBA_8888 1
