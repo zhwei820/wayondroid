@@ -11,7 +11,8 @@
  * vine_camera, or before its first frame, the test scene stays.
  *
  * The connection lasts while the guest streams: closed after a second
- * without a capture, which stops the phone's camera. */
+ * without a capture, which stops the phone's camera. Captures before the
+ * phone's first frame get the test scene. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <pthread.h>
@@ -57,15 +58,20 @@ struct planes {
 
 enum { kLayoutRGB = 0, kLayoutRGBA = 1, kLayoutARGB = 2 };
 
+/* The connection is made and dropped by the worker thread: the HAL's
+ * capture threads never wait for the phone's camera (cameraserver's
+ * watchdog aborts it when a HAL call stalls). */
 static struct {
     pthread_mutex_t lock;
+    pthread_cond_t wake;
     int fd;
-    int facing; /* 0 back, 1 front, -1 none */
+    int facing; /* connected: 0 back, 1 front, -1 none */
+    int want;   /* asked for by the last capture */
     struct vine_camera_shm* shm;
     size_t shm_size;
-    int64_t last_use_ns, retry_after_ns;
-    bool watchdog;
-} g = {.lock = PTHREAD_MUTEX_INITIALIZER, .fd = -1, .facing = -1};
+    int64_t last_use_ns;
+    bool worker;
+} g = {.lock = PTHREAD_MUTEX_INITIALIZER, .wake = PTHREAD_COND_INITIALIZER, .fd = -1, .facing = -1, .want = -1};
 
 static int64_t now_ns(void)
 {
@@ -83,19 +89,8 @@ static void disconnect_locked(void)
     g.facing = -1;
 }
 
-static void* watchdog(void* arg)
-{
-    (void)arg;
-    for (;;) {
-        sleep(1);
-        pthread_mutex_lock(&g.lock);
-        if (g.fd >= 0 && now_ns() - g.last_use_ns > 1000000000LL) disconnect_locked();
-        pthread_mutex_unlock(&g.lock);
-    }
-    return NULL;
-}
-
-static bool connect_locked(int facing)
+/* The phone's camera facing that way: its socket and frames, or false */
+static bool open_host(int facing, int* out_fd, struct vine_camera_shm** out_shm, size_t* out_size)
 {
     const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) return false;
@@ -132,11 +127,48 @@ static bool connect_locked(int facing)
         close(fd);
         return false;
     }
-    g.fd = fd;
-    g.facing = facing;
-    g.shm = p;
-    g.shm_size = size;
+    *out_fd = fd;
+    *out_shm = p;
+    *out_size = size;
     return true;
+}
+
+/* Connects to the camera the captures ask for; disconnects a second
+ * after the last capture (the phone's camera stops) */
+static void* worker(void* arg)
+{
+    (void)arg;
+    int64_t retry_after = 0;
+    pthread_mutex_lock(&g.lock);
+    for (;;) {
+        struct timespec t;
+        clock_gettime(CLOCK_REALTIME, &t);
+        t.tv_sec += 1;
+        pthread_cond_timedwait(&g.wake, &g.lock, &t);
+        const int64_t now = now_ns();
+        if (g.fd >= 0 && now - g.last_use_ns > 1000000000LL) {
+            disconnect_locked();
+            g.want = -1;
+        }
+        if (g.want < 0 || g.want == g.facing || now < retry_after) continue;
+        const int want = g.want;
+        disconnect_locked();
+        pthread_mutex_unlock(&g.lock);
+        int fd;
+        struct vine_camera_shm* shm;
+        size_t size;
+        const bool ok = open_host(want, &fd, &shm, &size);
+        pthread_mutex_lock(&g.lock);
+        if (!ok) {
+            retry_after = now_ns() + 3000000000LL;
+            continue;
+        }
+        g.fd = fd;
+        g.shm = shm;
+        g.shm_size = size;
+        g.facing = want;
+    }
+    return NULL;
 }
 
 /* The phone's latest frame for that camera, or NULL (the test scene then).
@@ -149,29 +181,24 @@ static const struct vine_camera_shm* acquire_frame(const void* chars, const uint
     else if (ch->width == FRONT_WIDTH) facing = 1;
     else return NULL;
     pthread_mutex_lock(&g.lock);
-    const int64_t now = now_ns();
-    g.last_use_ns = now;
-    if (!g.watchdog) {
+    g.last_use_ns = now_ns();
+    if (!g.worker) {
         pthread_t t;
-        if (pthread_create(&t, NULL, watchdog, NULL) == 0) {
+        if (pthread_create(&t, NULL, worker, NULL) == 0) {
             pthread_detach(t);
-            g.watchdog = true;
+            g.worker = true;
         }
     }
-    if (g.facing != facing) {
-        disconnect_locked();
-        if (now < g.retry_after_ns || !connect_locked(facing)) {
-            if (now >= g.retry_after_ns) g.retry_after_ns = now + 3000000000LL;
-            pthread_mutex_unlock(&g.lock);
-            return NULL;
-        }
+    if (g.want != facing) {
+        g.want = facing;
+        pthread_cond_signal(&g.wake);
     }
-    const struct vine_camera_shm* s = g.shm;
-    if (!atomic_load(&((struct vine_camera_shm*)s)->frames)) {
+    struct vine_camera_shm* s = g.facing == facing ? g.shm : NULL;
+    if (!s || !atomic_load(&s->frames)) {
         pthread_mutex_unlock(&g.lock);
         return NULL;
     }
-    const uint32_t slot = atomic_load(&((struct vine_camera_shm*)s)->latest) % VINE_CAMERA_SLOTS;
+    const uint32_t slot = atomic_load(&s->latest) % VINE_CAMERA_SLOTS;
     *i420 = (const uint8_t*)s + s->slot_offset + (size_t)slot * s->slot_size;
     return s;
 }
