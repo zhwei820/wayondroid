@@ -1164,7 +1164,11 @@ bool remove_foreign_apps(const std::string& R, std::string* error) {
 // directories added to `hidden` (apps see them as absent). Never made: names
 // a lookup would take over the guest's own (hw_get_module's variants, HIDL
 // passthrough's -impl prefixes, prep's checks below), and lib64/egl.
-// lib64 and lib only gain names: apps load libraries from there.
+// lib64 and lib only gain names: apps load libraries from there. Nor a
+// name the guest has elsewhere: vendor processes search /vendor/lib64
+// before the system's and VNDK's libraries, so a placeholder would shadow
+// one (SurfaceFlinger's EGL driver then fails to load). A placeholder on a
+// path that is no longer to have one is removed.
 std::string base64_decode(const std::string& in) {
     std::string out;
     uint32_t acc = 0;
@@ -1204,9 +1208,39 @@ bool vendor_view_skips(const std::string& path) {
     return false;
 }
 
+void library_names(const std::string& dir, std::set<std::string>* out) {
+    DIR* d = opendir(dir.c_str());
+    if (!d) return;
+    while (dirent* e = readdir(d)) {
+        const std::string n = e->d_name;
+        if (n.size() > 3 && n.compare(n.size() - 3, 3, ".so") == 0) out->insert(n);
+    }
+    closedir(d);
+}
+
+// A sparse file of zeros, as install_vendor_view makes
+bool vendor_placeholder(const std::string& path) {
+    struct stat st {};
+    if (lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size == 0 || st.st_blocks != 0) return false;
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    char head[64] = {};
+    const ssize_t n = read(fd, head, sizeof head);
+    close(fd);
+    return n > 0 && std::all_of(head, head + n, [](char c) { return c == 0; });
+}
+
 bool install_vendor_view(const std::string& R, const std::string& lib_dir, std::string* hidden, std::string* error) {
     const auto manifest = read_file(lib_dir + "/libvine_vendor_view.so");
     if (!manifest) return true;
+    std::set<std::string> guest_libs;
+    for (const char* d : {"/system/lib64", "/system/system_ext/lib64", "/system/product/lib64"})
+        library_names(R + d, &guest_libs);
+    if (DIR* d = opendir((R + "/system/apex").c_str())) {
+        while (dirent* e = readdir(d))
+            if (e->d_name[0] != '.') library_names(R + "/system/apex/" + e->d_name + "/lib64", &guest_libs);
+        closedir(d);
+    }
     std::set<std::string> listed;
     size_t at = 0;
     while (at < manifest->size()) {
@@ -1220,8 +1254,13 @@ bool install_vendor_view(const std::string& R, const std::string& lib_dir, std::
         const std::string path = line.substr(2, sp == std::string::npos ? std::string::npos : sp - 2);
         if (path.rfind("/vendor/", 0) != 0 || path.find("..") != std::string::npos) continue;
         listed.insert(path);
-        if (vendor_view_skips(path)) continue;
         const std::string full = R + path;
+        const bool shadows = path.rfind("/vendor/lib64/", 0) == 0 && path.find('/', 14) == std::string::npos &&
+                             guest_libs.count(path.substr(14));
+        if (vendor_view_skips(path) || shadows) {
+            if (vendor_placeholder(full) && unlink(full.c_str()) != 0) return fail_errno(error, "unlink " + full);
+            continue;
+        }
         struct stat st {};
         if (lstat(full.c_str(), &st) == 0) continue;
         if (kind == 'd') {
