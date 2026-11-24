@@ -1897,15 +1897,21 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
              !write_mode(vold_rc, with_service_option(*text, "vold", "setenv LD_PRELOAD /system/lib64/libvine_vold_shim.so"), 0644, error)))
             return false;
     }
-    // A Pixel 5's two display modes over the hwcomposer's one
-    const std::string composer_rc = R + "/vendor/etc/init/android.hardware.graphics.composer@2.1-service.rc";
-    if (const auto text = read_file(composer_rc); text && is_regular_file(o.lib_dir + "/libvine_hwc_shim.so")) {
-        if (!copy_mode(o.lib_dir + "/libvine_hwc_shim.so", R + "/vendor/lib64/libhwcomposer_ext.so", 0644, error) ||
-            (text->find("libhwcomposer_ext") == std::string::npos &&
-             !write_mode(composer_rc,
-                         with_service_option(*text, "vendor.hwcomposer-2-1", "setenv LD_PRELOAD /vendor/lib64/libhwcomposer_ext.so"),
-                         0644, error)))
+    // A Pixel 5's two display modes over the hwcomposer's one; Waydroid's
+    // init.waydroid.rc overrides the vendor rc's service
+    if (is_regular_file(o.lib_dir + "/libvine_hwc_shim.so")) {
+        if (!copy_mode(o.lib_dir + "/libvine_hwc_shim.so", R + "/vendor/lib64/libhwcomposer_ext.so", 0644, error))
             return false;
+        for (const char* rc : {"/vendor/etc/init/android.hardware.graphics.composer@2.1-service.rc",
+                               "/system/etc/init/init.waydroid.rc"}) {
+            const auto text = read_file(R + rc);
+            if (text && text->find("libhwcomposer_ext") == std::string::npos &&
+                !write_mode(R + rc,
+                            with_service_option(*text, "vendor.hwcomposer-2-1",
+                                                "setenv LD_PRELOAD /vendor/lib64/libhwcomposer_ext.so"),
+                            0644, error))
+                return false;
+        }
     }
     // The padded gralloc takes gralloc.default's place (the hwcomposer and
     // Mesa tell gralloc kinds apart by ro.hardware.gralloc) and loads it
