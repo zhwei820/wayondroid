@@ -29,7 +29,11 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -41,9 +45,10 @@ import java.util.zip.ZipOutputStream;
  * calls (package queries and intent resolution) made through VineAppsHide.
  * service-connectivity.jar: the Ethernet network's legacy type name "WIFI",
  * as Wi-Fi's network agent names it, to go with the WIFI type the guest's
- * overlay gives it, and its capabilities through VineEthernet. service-wifi.jar: WifiServiceImpl's Wi-Fi state and
- * connection info through VineWifi. A hook (hook/) goes in as one more
- * classesN.dex. Exits 2, writing nothing, when IN is none of these or is
+ * overlay gives it, and its capabilities through VineEthernet.
+ * service-wifi.jar: WifiServiceImpl's Wi-Fi state, connection info and
+ * scans, and ScanRequestProxy's failure broadcasts, through VineWifi. Each
+ * hook (hook/) goes in as one more classesN.dex. Exits 2, writing nothing, when IN is none of these or is
  * already patched.
  */
 public final class Main {
@@ -72,6 +77,7 @@ public final class Main {
         new Patch("Lcom/android/server/ethernet/EthernetNetworkFactory$NetworkInterfaceState;", "VineEthernet",
                 Main::patchEthernet),
         new Patch("Lcom/android/server/wifi/WifiServiceImpl;", "VineWifi", Main::redirectWifi),
+        new Patch("Lcom/android/server/wifi/ScanRequestProxy;", "VineWifi", Main::redirectScanFailure),
     };
 
     /** The calls made to a hook, which it must declare */
@@ -96,37 +102,42 @@ public final class Main {
                 }
                 files.add(dex);
             }
-            byte[] patched = null;
-            String patchedName = null;
-            Patch patch = null;
-            for (int d = 0; d < files.size() && patched == null; d++) {
+            // Every patch whose class the jar has, each dex rewritten once
+            Map<String, byte[]> patched = new HashMap<>();
+            Set<String> hooks = new LinkedHashSet<>();
+            for (int d = 0; d < files.size(); d++) {
+                List<Patch> here = new ArrayList<>();
                 for (ClassDef c : files.get(d).getClasses()) {
                     for (Patch p : PATCHES) {
-                        if (patched == null && c.getType().equals(p.type)) {
-                            patched = rewrite(files.get(d), p);
-                            patchedName = dexes.get(d);
-                            patch = p;
-                        }
+                        if (c.getType().equals(p.type)) here.add(p);
                     }
                 }
-            }
-            if (patched == null) fail("nothing to patch");
-            if (edits == 0 || patch.hook != null && redirected.isEmpty()) fail("no call to redirect in " + patch.type);
-            byte[] hook = patch.hook == null ? null : read(Main.class.getResourceAsStream("/" + patch.hook + ".dex"));
-            if (hook != null) {
-                DexBackedDexFile hookDex = new DexBackedDexFile(Opcodes.forApi(33), hook);
-                for (MethodReference ref : redirected) {
-                    if (!declares(hookDex, ref)) fail("the hook lacks " + ref);
+                if (here.isEmpty()) continue;
+                patched.put(dexes.get(d), rewrite(files.get(d), here));
+                for (Patch p : here) {
+                    if (p.hook != null) hooks.add(p.hook);
                 }
+            }
+            if (patched.isEmpty()) fail("nothing to patch");
+            if (edits == 0 || !hooks.isEmpty() && redirected.isEmpty()) fail("nothing to change");
+            List<byte[]> hookDexes = new ArrayList<>();
+            for (String h : hooks) hookDexes.add(read(Main.class.getResourceAsStream("/" + h + ".dex")));
+            for (MethodReference ref : redirected) {
+                boolean found = false;
+                for (byte[] h : hookDexes) found |= declares(new DexBackedDexFile(Opcodes.forApi(33), h), ref);
+                if (!found) fail("no hook declares " + ref);
             }
             try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(args[1]))) {
                 long at = 0;
                 for (Enumeration<? extends ZipEntry> e = in.entries(); e.hasMoreElements(); ) {
                     ZipEntry entry = e.nextElement();
-                    byte[] data = entry.getName().equals(patchedName) ? patched : read(in.getInputStream(entry));
+                    byte[] data = patched.containsKey(entry.getName()) ? patched.get(entry.getName())
+                            : read(in.getInputStream(entry));
                     at = put(out, at, entry.getName(), data);
-                    if (hook != null && entry.getName().equals(dexes.get(dexes.size() - 1))) {
-                        at = put(out, at, dexName(dexes.size() + 1), hook);
+                    if (entry.getName().equals(dexes.get(dexes.size() - 1))) {
+                        for (int h = 0; h < hookDexes.size(); h++) {
+                            at = put(out, at, dexName(dexes.size() + 1 + h), hookDexes.get(h));
+                        }
                     }
                 }
             }
@@ -156,11 +167,15 @@ public final class Main {
         return i == 1 ? "classes.dex" : "classes" + i + ".dex";
     }
 
-    /** `dex` with the patch's class's methods edited */
-    static byte[] rewrite(DexBackedDexFile dex, Patch patch) throws IOException {
+    /** `dex` with the patches' classes' methods edited */
+    static byte[] rewrite(DexBackedDexFile dex, List<Patch> patches) throws IOException {
         DexPool pool = new DexPool(dex.getOpcodes());
         for (ClassDef c : dex.getClasses()) {
-            if (!c.getType().equals(patch.type)) {
+            Patch patch = null;
+            for (Patch p : patches) {
+                if (c.getType().equals(p.type)) patch = p;
+            }
+            if (patch == null) {
                 pool.internClass(c);
                 continue;
             }
@@ -206,8 +221,14 @@ public final class Main {
         return false;
     }
 
+    /** ScanRequestProxy.startScan's failure broadcasts, which VineWifi's scans replace */
+    static boolean redirectScanFailure(Method m, MutableMethodImplementation impl) {
+        return m.getName().equals("startScan") && redirect(impl, PATCHES[3], "Lcom/android/server/wifi/ScanRequestProxy;",
+                "sendScanResultFailureBroadcastToPackage");
+    }
+
     /**
-     * Each virtual or interface call of owner.name made a static call of
+     * Each virtual, interface or direct call of owner.name made a static call of
      * the hook's method of that name, the receiver its first parameter
      */
     static boolean redirect(MutableMethodImplementation impl, Patch patch, String owner, String name) {
@@ -217,7 +238,7 @@ public final class Main {
             BuilderInstruction insn = insns.get(i);
             Opcode op = insn.getOpcode();
             boolean range = op == Opcode.INVOKE_INTERFACE_RANGE || op == Opcode.INVOKE_VIRTUAL_RANGE;
-            if (!range && op != Opcode.INVOKE_INTERFACE && op != Opcode.INVOKE_VIRTUAL) continue;
+            if (!range && op != Opcode.INVOKE_INTERFACE && op != Opcode.INVOKE_VIRTUAL && op != Opcode.INVOKE_DIRECT) continue;
             Object r = ((ReferenceInstruction) insn).getReference();
             if (!(r instanceof MethodReference) || !((MethodReference) r).getDefiningClass().equals(owner)
                     || !((MethodReference) r).getName().equals(name))

@@ -11,7 +11,8 @@ import java.util.function.Supplier;
 
 /**
  * Added to the guest's service-wifi.jar by dev.vine.pmpatch.Main, which
- * points four calls of WifiServiceImpl here. The guest has no Wi-Fi radio;
+ * points four calls of WifiServiceImpl and ScanRequestProxy's scan
+ * failure broadcasts here. The guest has no Wi-Fi radio;
  * it is online through tawcroot's wlan0, which the framework already counts
  * as a Wi-Fi network. Apps asking WifiManager see that network: Wi-Fi on,
  * connected to VineWifiInfo's access point, which scans find with its
@@ -48,5 +49,21 @@ public final class VineWifi {
             return Boolean.TRUE;
         }
         return result;
+    }
+
+    /**
+     * ScanRequestProxy.startScan's sendScanResultFailureBroadcastToPackage:
+     * none while startScan reports VineWifiInfo's scans instead
+     */
+    public static void sendScanResultFailureBroadcastToPackage(ScanRequestProxy proxy, String packageName) {
+        if (VineWifiInfo.wlan0() != null) return;
+        try {
+            java.lang.reflect.Method m =
+                    ScanRequestProxy.class.getDeclaredMethod("sendScanResultFailureBroadcastToPackage", String.class);
+            m.setAccessible(true);
+            m.invoke(proxy, packageName);
+        } catch (Exception e) {
+            // no broadcast
+        }
     }
 }

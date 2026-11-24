@@ -146,7 +146,23 @@ public class Main extends Activity {
                 new android.content.IntentFilter(android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION));
         put("wifi.sticky", sticky == null ? null : sticky.getIntExtra(android.net.wifi.WifiManager.EXTRA_WIFI_STATE, -1));
         try {
-            put("wifi.startScan", wm.startScan());
+            java.util.concurrent.CountDownLatch got = new java.util.concurrent.CountDownLatch(1);
+            boolean[] updated = {false};
+            android.os.HandlerThread t = new android.os.HandlerThread("scan");
+            t.start();
+            android.content.BroadcastReceiver r = new android.content.BroadcastReceiver() {
+                @Override public void onReceive(android.content.Context c, android.content.Intent i) {
+                    updated[0] = i.getBooleanExtra(android.net.wifi.WifiManager.EXTRA_RESULTS_UPDATED, false);
+                    got.countDown();
+                }
+            };
+            registerReceiver(r, new android.content.IntentFilter(android.net.wifi.WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
+                    null, new android.os.Handler(t.getLooper()));
+            boolean started = wm.startScan();
+            boolean arrived = got.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            unregisterReceiver(r);
+            t.quit();
+            put("wifi.startScan", started + " broadcast=" + (arrived ? "updated=" + updated[0] : "none"));
         } catch (Exception e) {
             put("wifi.startScan", e);
         }
