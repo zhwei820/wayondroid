@@ -542,6 +542,7 @@ public class Main extends Activity {
         /* stream a while first: the camera may show a placeholder until it is ready */
         final long[] since = {Long.MAX_VALUE};
         final int[] frames = {0};
+        final android.hardware.camera2.CameraCaptureSession[] session = {null};
         try {
             android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
             final android.media.ImageReader reader = android.media.ImageReader.newInstance(640, 480, android.graphics.ImageFormat.JPEG, 2);
@@ -567,6 +568,7 @@ public class Main extends Activity {
                         d.createCaptureSession(java.util.Collections.singletonList(reader.getSurface()),
                                 new android.hardware.camera2.CameraCaptureSession.StateCallback() {
                                     @Override public void onConfigured(android.hardware.camera2.CameraCaptureSession sess) {
+                                        session[0] = sess;
                                         try {
                                             android.hardware.camera2.CaptureRequest.Builder rb =
                                                     d.createCaptureRequest(android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW);
@@ -588,6 +590,13 @@ public class Main extends Activity {
         } catch (Exception e) {
             result[0] = "ERR " + e;
         } finally {
+            try {
+                if (session[0] != null) {
+                    session[0].stopRepeating();
+                    session[0].close();
+                }
+            } catch (Exception ignored) {
+            }
             if (dev[0] != null) dev[0].close();
             ht.quitSafely();
         }
