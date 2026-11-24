@@ -138,6 +138,9 @@ struct event {
 /* The goldfish handles (sensor_list.h) */
 enum { kProximity = 5, kLight = 6, kPressure = 7, kHinge0 = 11, kHinge1 = 12, kHinge2 = 13, kSensors = 18 };
 enum { kTypeSignificantMotion = 17, kTypeStepDetector = 18, kTypeStepCounter = 19, kTypeHinge = 36 };
+/* Phones report a binary proximity sensor's "far" as its range in cm; the
+ * goldfish one's range is 1 */
+static const float kProximityFar = 5.0f;
 enum { kWakeUp = 1, kOnChange = 2, kOneShot = 4, kSpecial = 6 };
 
 static const struct {
@@ -209,6 +212,7 @@ static void patch_table(void)
     set_str(&t[kProximity].vendor, "AMS");
     set_str(&t[kLight].vendor, "AMS");
     t[kProximity].flags |= kWakeUp;
+    t[kProximity].max_range = kProximityFar;
     for (size_t i = 0; i < sizeof kRetype / sizeof kRetype[0]; i++) {
         struct sensor_info* s = &t[kRetype[i].handle];
         s->type = kRetype[i].type;
@@ -314,6 +318,13 @@ EXPORT void POST_SENSOR_EVENT(void* self, const struct event* e)
 {
     const post_fn real = real_post();
     if (!real) return;
+    if (e->handle == kProximity) {
+        struct event out = *e;
+        out.u.data[0] = e->u.data[0] > 0.5f ? kProximityFar : 0.0f;
+        remember(&out);
+        real(self, &out);
+        return;
+    }
     if (e->type != kTypeHinge || e->handle < kHinge0 || e->handle > kHinge2) {
         remember(e);
         real(self, e);

@@ -1,5 +1,7 @@
-/* `--fake-net`: the guest sees a loopback, one link, wlan0, and dummy0 (as
- * a phone's kernel has: up, only its link-local address, no traffic),
+/* `--fake-net`: the guest sees a loopback, one link, wlan0, and dummy0,
+ * ifb0 and ifb1 (as a phone's kernel has: up, only their link-local
+ * addresses, no traffic; its rmnet links stay down without a SIM, and apps
+ * list only links with an address),
  * configured over rtnetlink and SIOC* ioctls as on a real kernel, while
  * its traffic goes out through the app's own sockets. An app can't read
  * or change the host's links (NETLINK_ROUTE binds and dumps are denied),
@@ -73,8 +75,8 @@
 #define NE_OPER_DOWN 2
 #define NE_OPER_UP 6
 
-#define NE_MAGIC 0x4e455433u
-#define NE_LINKS 3
+#define NE_MAGIC 0x4e455434u
+#define NE_LINKS 5
 #define NE_ADDRS 32
 #define NE_SUBS 64
 #define NE_MAX_IOV 16
@@ -118,6 +120,9 @@ static char eth_address[18] = "a6:3c:7e:91:5d:28";
 /* dummy0's, random as the kernel makes it: derived from eth_mac by load_mac */
 static uint8_t dummy_mac[6] = { 0x5e, 0x91, 0x0c, 0x27, 0xb3, 0x4a };
 static char dummy_address[18] = "5e:91:0c:27:b3:4a";
+/* ifb0's and ifb1's, likewise */
+static uint8_t ifb_mac[2][6] = { { 0x8a, 0x2d, 0x61, 0xf4, 0x07, 0xc3 }, { 0x3e, 0xb8, 0x95, 0x1a, 0x6c, 0x50 } };
+static char ifb_address[2][18] = { "8a:2d:61:f4:07:c3", "3e:b8:95:1a:6c:50" };
 
 static int enabled(void)
 {
@@ -150,13 +155,16 @@ static void defaults(struct ne_state *s)
 	eth->type = NE_ARPHRD_ETHER;
 	memcpy(eth->mac, eth_mac, 6);
 	memcpy(eth->name, TAWCROOT_NETEMU_LINK, sizeof TAWCROOT_NETEMU_LINK);
-	struct ne_link *dummy = &s->link[2];
-	dummy->index = 3;
-	dummy->flags = NE_IFF_UP | NE_IFF_BROADCAST | NE_IFF_NOARP | NE_IFF_RUNNING | NE_IFF_LOWER_UP;
-	dummy->mtu = 1500;
-	dummy->type = NE_ARPHRD_ETHER;
-	memcpy(dummy->mac, dummy_mac, 6);
-	memcpy(dummy->name, "dummy0", 7);
+	static const char *const virt[] = { "dummy0", "ifb0", "ifb1" };
+	for (int i = 0; i < 3; i++) {
+		struct ne_link *l = &s->link[2 + i];
+		l->index = 3 + i;
+		l->flags = NE_IFF_UP | NE_IFF_BROADCAST | NE_IFF_NOARP | NE_IFF_RUNNING | NE_IFF_LOWER_UP;
+		l->mtu = 1500;
+		l->type = NE_ARPHRD_ETHER;
+		memcpy(l->mac, i ? ifb_mac[i - 1] : dummy_mac, 6);
+		memcpy(l->name, virt[i], tawc_strlen(virt[i]) + 1);
+	}
 	struct ne_addr *a = &s->addr[0];
 	a->index = 1; a->family = NE_INET; a->prefix = 8; a->scope = RT_SCOPE_HOST;
 	a->used = 1; a->flags = IFA_F_PERMANENT;
@@ -165,11 +173,12 @@ static void defaults(struct ne_state *s)
 	a->index = 1; a->family = NE_INET6; a->prefix = 128; a->scope = RT_SCOPE_HOST;
 	a->used = 1; a->flags = IFA_F_PERMANENT;
 	a->addr[15] = 1;
-	/* Apps list only links with an address: on a phone, dummy0 is one */
-	a = &s->addr[2];
-	a->index = dummy->index; a->family = NE_INET6; a->prefix = 64; a->scope = RT_SCOPE_LINK;
-	a->used = 1; a->flags = IFA_F_PERMANENT;
-	link_local(a->addr, dummy->mac);
+	for (int i = 0; i < 3; i++) {
+		a = &s->addr[2 + i];
+		a->index = s->link[2 + i].index; a->family = NE_INET6; a->prefix = 64; a->scope = RT_SCOPE_LINK;
+		a->used = 1; a->flags = IFA_F_PERMANENT;
+		link_local(a->addr, s->link[2 + i].mac);
+	}
 }
 
 static long store_file(char *out, const char *name)
@@ -224,6 +233,13 @@ static void load_mac(void)
 		eth_address[3 * i + 1] = digits[eth_mac[i] & 15];
 		dummy_address[3 * i] = digits[dummy_mac[i] >> 4];
 		dummy_address[3 * i + 1] = digits[dummy_mac[i] & 15];
+		for (int k = 0; k < 2; k++) {
+			uint8_t *m = ifb_mac[k];
+			m[i] = (uint8_t)(eth_mac[(i + 2 + k) % 6] * (101u + 26u * (unsigned)k) + 0x59 * (unsigned)(i + k));
+			if (!i) m[i] = (uint8_t)((m[i] & 0xfc) | 0x02);
+			ifb_address[k][3 * i] = digits[m[i] >> 4];
+			ifb_address[k][3 * i + 1] = digits[m[i] & 15];
+		}
 	}
 }
 
@@ -1264,6 +1280,20 @@ static const char *const sys_dummy[] = {
 	"tx_queue_len", "1000", "dev_id", "0x0", "dev_port", "0", "addr_assign_type", "1",
 	"uevent", "INTERFACE=dummy0\nIFINDEX=3", 0
 };
+static const char *const sys_ifb0[] = {
+	"ifindex", "4", "iflink", "4", "address", ifb_address[0],
+	"broadcast", "ff:ff:ff:ff:ff:ff", "mtu", "1500", "flags", "0x83",
+	"operstate", "unknown", "carrier", "1", "type", "1", "addr_len", "6",
+	"tx_queue_len", "32", "dev_id", "0x0", "dev_port", "0", "addr_assign_type", "1",
+	"uevent", "INTERFACE=ifb0\nIFINDEX=4", 0
+};
+static const char *const sys_ifb1[] = {
+	"ifindex", "5", "iflink", "5", "address", ifb_address[1],
+	"broadcast", "ff:ff:ff:ff:ff:ff", "mtu", "1500", "flags", "0x83",
+	"operstate", "unknown", "carrier", "1", "type", "1", "addr_len", "6",
+	"tx_queue_len", "32", "dev_id", "0x0", "dev_port", "0", "addr_assign_type", "1",
+	"uevent", "INTERFACE=ifb1\nIFINDEX=5", 0
+};
 static const char *const conf4[] = {
 	"forwarding", "0", "mc_forwarding", "0", "rp_filter", "0", "accept_redirects", "1",
 	"send_redirects", "1", "accept_local", "0", "arp_ignore", "0", "arp_announce", "0",
@@ -1290,12 +1320,14 @@ static const char *const proc_top[] = {
 
 static long populate(int root)
 {
-	static const char *const ifs[] = { "all", "default", "lo", TAWCROOT_NETEMU_LINK, "dummy0" };
+	static const char *const ifs[] = { "all", "default", "lo", TAWCROOT_NETEMU_LINK, "dummy0", "ifb0", "ifb1" };
 	long e = put_list(root, "sys/lo", sys_lo);
 	if (!e) e = put_list(root, "sys/" TAWCROOT_NETEMU_LINK, sys_eth);
 	if (!e) e = put_list(root, "sys/dummy0", sys_dummy);
+	if (!e) e = put_list(root, "sys/ifb0", sys_ifb0);
+	if (!e) e = put_list(root, "sys/ifb1", sys_ifb1);
 	char dir[64];
-	for (int i = 0; !e && i < 5; ++i) {
+	for (int i = 0; !e && i < (int)(sizeof ifs / sizeof ifs[0]); ++i) {
 		static const char *const roots[] = { "proc/ipv4/conf/", "proc/ipv6/conf/",
 						     "proc/ipv4/neigh/", "proc/ipv6/neigh/" };
 		for (int k = 0; !e && k < 4; ++k) {
