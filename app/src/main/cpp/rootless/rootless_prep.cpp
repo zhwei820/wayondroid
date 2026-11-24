@@ -291,7 +291,7 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
 // check aborts.
 std::string waydroid_prop(int dpi, bool gpu) {
     return std::string(gpu ? "" : "ro.hardware.gralloc=default\n") +
-           "ro.hardware.egl=angle\n" +
+           (gpu ? "ro.hardware.egl=adreno\n" : "ro.hardware.egl=angle\n") +
            (gpu ? "ro.hardware.vulkan=adreno\nro.vendor.display.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
            "sys.use_memfd=true\n"
            // Codec2 takes linear buffers from DMA-BUF heaps, which apps
@@ -672,6 +672,59 @@ bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* i
     return true;
 }
 
+// Waydroid's health HAL overwrites what healthd read from
+// /sys/class/power_supply with an emulator's battery (AC and USB online,
+// 85 %, 3.6 V, 35 °C) in its healthd_board_battery_update(). Patched to
+// return at once, so the phone's battery the app publishes there shows.
+// Found by its body (mov w9, #0x101; mov w10, #1 after the frame setup);
+// already patched or another build: left alone.
+bool patch_health_hal(const std::string& R, std::string* error) {
+    const std::string path = R + "/vendor/bin/hw/android.hardware.health@2.0-service.waydroid";
+    auto bin = read_file(path);
+    if (!bin) return true;
+    auto words = [](std::initializer_list<uint32_t> ws) {
+        std::string out;
+        for (uint32_t w : ws)
+            for (int i = 0; i < 4; ++i) out += char((w >> (8 * i)) & 0xff);
+        return out;
+    };
+    const std::string body = words({0x52802029, 0x5280002a}), patched = words({0x2a1f03e0, 0xd65f03c0});
+    const size_t at = bin->find(body);
+    if (at == std::string::npos || at < 12 || bin->find(body, at + 1) != std::string::npos) return true;
+    const size_t fn = at - 12;
+    if (bin->compare(fn, 8, patched) == 0) return true;
+    if (bin->compare(fn, 8, words({0xa9bf7bfd, 0x910003fd})) != 0 ||
+        bin->find(words({0x529fbc09, 0x72a00389}), at) > at + 32)  // 1900000 µAh
+        return true;
+    bin->replace(fn, 8, patched);
+    return write_mode(path, *bin, 0755, error);
+}
+
+// With the GPU, ANGLE takes the Adreno driver's names (ro.hardware.egl
+// adreno): its EGL library as libEGL_adreno.so, and gles_shim.c, which
+// reports an Adreno's strings, as the GLES libraries. ANGLE's GLES library
+// stays where its EGL library needs it; tawcroot shows it in apps' maps as
+// an Adreno driver library, copied there too.
+const char* const kAngleHidden[] = {"/vendor/lib64/egl/libEGL_angle.so", "/vendor/lib64/egl/libGLESv1_CM_angle.so",
+                                    "/vendor/lib64/egl/libEGL_mesa.so", "/vendor/lib64/egl/libGLESv1_CM_mesa.so",
+                                    "/vendor/lib64/egl/libGLESv2_mesa.so"};
+
+bool copy_if_changed(const std::string& from, const std::string& to, std::string* error) {
+    struct stat a {}, b {};
+    if (stat(from.c_str(), &a) != 0) return fail_errno(error, "stat " + from);
+    if (stat(to.c_str(), &b) == 0 && a.st_size == b.st_size) return true;
+    return copy_mode(from, to, 0644, error);
+}
+
+bool install_adreno_egl(const std::string& R, const std::string& lib_dir, std::string* error) {
+    const std::string egl = R + "/vendor/lib64/egl";
+    if (!is_regular_file(egl + "/libEGL_angle.so") || !is_regular_file(egl + "/libGLESv2_angle.so")) return true;
+    return copy_if_changed(egl + "/libEGL_angle.so", egl + "/libEGL_adreno.so", error) &&
+           copy_if_changed(egl + "/libGLESv2_angle.so", R + "/vendor/lib64/libllvm-glnext.so", error) &&
+           copy_mode(lib_dir + "/libvine_gles_shim.so", egl + "/libGLESv2_adreno.so", 0644, error) &&
+           copy_mode(lib_dir + "/libvine_gles_shim.so", egl + "/libGLESv1_CM_adreno.so", 0644, error);
+}
+
 // tawcroot's device view (tawcroot/include/device_view.h): what apps read
 // of the Pixel 5's SoC, kernel, RAM and storage instead of the phone's.
 // Unverified on a device: the Kryo 475 silver cores' variant, the kernel's
@@ -705,9 +758,10 @@ bool write_device_view(const std::string& store, std::string* error) {
                 !write_mode(cpu + "/regs/identification/midr_el1", std::string(c.midr) + "\n", 0644, error) ||
                 !write_mode(cpu + "/regs/identification/revidr_el1", "0x0000000000000000\n", 0644, error))
                 return false;
-            // The phone's own policy dirs, whatever cores they cover
-            const std::string policy = D + "/sys-cpu/cpufreq/policy" + std::to_string(i);
-            if (!mkdirs_or_fail(policy, error) || !put_freq(policy)) return false;
+            // A policy per cluster, named for its first core; the phone's
+            // policy dirs are shown under these names (tawcroot ranks them)
+            const std::string policy = D + "/sys-cpu/cpufreq/policy" + std::to_string(c.first);
+            if (i == c.first && (!mkdirs_or_fail(policy, error) || !put_freq(policy))) return false;
             cpuinfo += "processor\t: " + std::to_string(i) +
                        "\nBogoMIPS\t: 38.40\n"
                        "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc "
@@ -717,6 +771,10 @@ bool write_device_view(const std::string& store, std::string* error) {
         }
     }
     cpuinfo += "Hardware\t: Qualcomm Technologies, Inc LITO\n";
+#if defined(__aarch64__)
+    // AT_HWCAP of the Features above (fp .. asimddp), no AT_HWCAP2 ones
+    if (!write_mode(D + "/hwcap", "0x119fff 0x0\n", 0644, error)) return false;
+#endif
     return write_mode(D + "/cpuinfo", cpuinfo, 0644, error) &&
            write_mode(D + "/uname", "4.19.282-g8b2a6e3c1f0d-ab10577962\n#1 SMP PREEMPT Mon Jul 31 19:57:23 UTC 2023\n",
                       0644, error) &&
@@ -1419,14 +1477,20 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.redfin.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
+    std::string angle_hidden;
+    if (o.gpu) {
+        if (!install_adreno_egl(R, o.lib_dir, error)) return false;
+        for (const char* f : kAngleHidden) angle_hidden += std::string(f) + "\n";
+    }
     if (!id.empty() && !apply_device_features(R, error)) return false;
+    if (!patch_health_hal(R, error)) return false;
     if (id.empty() ? !remove_if_exists(l.store + "/device", error) : !write_device_view(l.store, error)) return false;
     // The guest's /sys/class/power_supply, which VineVMManager fills from
     // the phone's battery
     if (!mkdirs_or_fail(l.work + "/power_supply", error) || chmod((l.work + "/power_supply").c_str(), 0755) != 0)
         return fail_errno(error, "chmod power_supply");
     if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) ||
-        !write_mode(l.store + "/app-hidden", app_hidden_list(R), 0644, error) ||
+        !write_mode(l.store + "/app-hidden", app_hidden_list(R) + angle_hidden, 0644, error) ||
         !std::all_of(std::begin(kPatchedJars), std::end(kPatchedJars),
                      [&](const char* jar) { return patch_guest_jar(l, o.lib_dir, jar, error); }))
         return false;

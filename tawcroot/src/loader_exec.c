@@ -16,6 +16,7 @@
 #include "io.h"
 #include "loader_elf.h"
 #include "loader_exec.h"
+#include "device_view.h"
 #include "stats.h"
 #include "loader_jump.h"
 #include "proctitle.h"
@@ -462,6 +463,7 @@ void tawcroot_loader_exec(const struct tawc_loader_exec_args *args)
 		.at_flags        = g_host_at_flags,
 	};
 
+	tawcroot_device_hwcap(&in.at_hwcap, &in.at_hwcap2);
 	struct tawc_loader_stack_out so;
 	if (tawc_loader_build_stack(stack, STACK_SZ, &in, &so) != 0)
 		LOADER_FAIL(72);

@@ -8,6 +8,7 @@
 #include "errno_neg.h"
 #include "io.h"
 #include "linkstore.h"
+#include "loader_exec.h"
 #include "path.h"
 #include "path_scratch.h"
 #include "raw_sys.h"
@@ -183,10 +184,130 @@ size_t tawcroot_device_status(char *buf, size_t len, size_t cap)
 	return o;
 }
 
+/* /proc/self/<leaf>, /proc/thread-self/<leaf> or /proc/<our pid>/<leaf> */
+static int own_proc_file(const char *path, const char *leaf)
+{
+	if (!tawc_starts_with(path, "/proc/")) return 0;
+	const char *p = path + 6;
+	if (tawc_starts_with(p, "self/")) p += 5;
+	else if (tawc_starts_with(p, "thread-self/")) p += 12;
+	else {
+		unsigned long pid = 0;
+		const char *q = p;
+		while (*q >= '0' && *q <= '9') pid = pid * 10 + (unsigned long)(*q++ - '0');
+		if (q == p || *q != '/' || pid != (unsigned long)tawc_getpid()) return 0;
+		p = q + 1;
+	}
+	return tawc_streq(p, leaf);
+}
+
+/* The auxv the loader gave the guest (loader_stack.c), not the kernel's
+ * for tawcroot itself: that one names tawcroot's own load address and the
+ * host's whole HWCAP */
+static long open_auxv(int flags)
+{
+	const uint64_t *w = (const uint64_t *)tawcroot_guest_start_stack;
+	if (!w) return TAWC_ENOSYS;
+	w += 1 + w[0] + 1;          /* argc, argv, NULL */
+	while (*w) w++;             /* envp */
+	w++;
+	const uint64_t *aux = w;
+	while (w[0] != 0) w += 2;   /* to AT_NULL */
+	return memfd_of("tawcroot-auxv", (const char *)aux, (size_t)((const char *)(w + 2) - (const char *)aux), flags);
+}
+
+void tawcroot_device_hwcap(uint64_t *hwcap, uint64_t *hwcap2)
+{
+	char text[64];
+	if (read_device("hwcap", text, sizeof text) <= 0) return;
+	uint64_t v[2] = { 0, 0 };
+	const char *c = text;
+	for (int i = 0; i < 2; i++) {
+		while (*c == ' ' || *c == '\n') c++;
+		if (c[0] == '0' && (c[1] == 'x' || c[1] == 'X')) c += 2;
+		for (;; c++) {
+			int d = *c >= '0' && *c <= '9' ? *c - '0' : *c >= 'a' && *c <= 'f' ? *c - 'a' + 10 : -1;
+			if (d < 0) break;
+			v[i] = v[i] * 16 + (uint64_t)d;
+		}
+	}
+	*hwcap &= v[0];
+	*hwcap2 &= v[1];
+}
+
+/* "policy<n>" names of a getdents64 buffer or directory, ascending */
+static int policy_number(const char *name)
+{
+	if (!tawc_starts_with(name, "policy") || !name[6]) return -1;
+	int v = 0;
+	for (const char *c = name + 6; *c; c++) {
+		if (*c < '0' || *c > '9') return -1;
+		v = v * 10 + (*c - '0');
+	}
+	return v;
+}
+
+static int sorted_policies(const char *buf, long n, int *out, int cap)
+{
+	int count = 0;
+	for (long off = 0; off < n;) {
+		unsigned short reclen;
+		__builtin_memcpy(&reclen, buf + off + 16, sizeof reclen);
+		if (reclen == 0 || off + reclen > n) break;
+		int v = policy_number(buf + off + 19);
+		if (v >= 0 && count < cap) {
+			int i = count++;
+			while (i > 0 && out[i - 1] > v) { out[i] = out[i - 1]; i--; }
+			out[i] = v;
+		}
+		off += reclen;
+	}
+	return count;
+}
+
+long tawcroot_device_dirents(const char *dir, char *buf, long n)
+{
+	if (!tawc_streq(dir, "/sys/devices/system/cpu/cpufreq") || !has_device()) return n;
+	int host[16], dev[16];
+	int nh = sorted_policies(buf, n, host, 16);
+	if (!nh) return n;
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	char *path = scratch->buf[0], *list = scratch->buf[1];
+	size_t k = 0;
+	if (tawc_str_append(path, TAWCROOT_PATH_SCRATCH_SIZE, &k, tawcroot_store_host_path) ||
+	    tawc_str_append(path, TAWCROOT_PATH_SCRATCH_SIZE, &k, "/device/sys-cpu/cpufreq"))
+		return n;
+	long fd = tawc_openat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+	if (fd < 0) return n;
+	long got = tawc_getdents64((int)fd, list, TAWCROOT_PATH_SCRATCH_SIZE);
+	tawc_close((int)fd);
+	if (got <= 0 || sorted_policies(list, got, dev, 16) != nh) return n;
+	/* The i-th of the phone's policies is the device's i-th: renamed in
+	 * place, when the names are as long */
+	for (long off = 0; off < n;) {
+		unsigned short reclen;
+		__builtin_memcpy(&reclen, buf + off + 16, sizeof reclen);
+		if (reclen == 0 || off + reclen > n) break;
+		char *name = buf + off + 19;
+		int v = policy_number(name);
+		for (int i = 0; v >= 0 && i < nh; i++) {
+			if (host[i] != v) continue;
+			if ((host[i] < 10) == (dev[i] < 10) && dev[i] < 100) {
+				if (dev[i] >= 10) { name[6] = (char)('0' + dev[i] / 10); name[7] = (char)('0' + dev[i] % 10); }
+				else name[6] = (char)('0' + dev[i]);
+			}
+			break;
+		}
+		off += reclen;
+	}
+	return n;
+}
+
 long tawcroot_device_open(const char *path, int flags)
 {
 	if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_PATH | O_DIRECTORY))) return TAWC_ENOSYS;
 	if (tawc_streq(path, "/proc/meminfo")) return open_meminfo(flags);
+	if (own_proc_file(path, "auxv")) return open_auxv(flags);
 	if (!tawcroot_guest_is_app() || !has_device()) return TAWC_ENOSYS;
 	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
 	char *buf = scratch->buf[1];
