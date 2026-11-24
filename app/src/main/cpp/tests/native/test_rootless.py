@@ -208,6 +208,7 @@ def build_libs(lib):
     write_exec(os.path.join(lib, "libvine_hal_service.so"), "#!/bin/sh\n# hal\n")
     for part in ("multihal", "ranchu", "wakelock", "shim"):
         write_exec(os.path.join(lib, f"libvine_sensors_{part}.so"), f"sensors {part}\n")
+    write_exec(os.path.join(lib, "libvine_sensors_ranchu.so"), "sensors ranchu\0Goldfish Light sensor\0x\n")
     for part in RADIO_LIBS:
         write_exec(os.path.join(lib, f"libvine_{part}.so"), f"radio {part}\n")
     write_exec(os.path.join(lib, "libvine_wifinet_overlay.so"), "wifinet overlay\n")
@@ -353,7 +354,7 @@ def main():
     check(not os.path.exists(os.path.join(R, "system/product/app/Etar")), "Lineage apps removed")
     ctx = read(os.path.join(R, "vendor/etc/selinux/vendor_property_contexts"))
     check(ctx.startswith("ro.hardware. ") and ctx.count("\nwaydroid. ") == 1 and "\nro.lineage. " in ctx and
-          ctx.count("\nro.vendor.vine.gpu ") == 1, "Waydroid and Lineage props hidden from apps: " + ctx)
+          ctx.count("\nro.vendor.display.gpu ") == 1, "Waydroid and Lineage props hidden from apps: " + ctx)
     z = read(os.path.join(R, "system/etc/init/hw/init.zygote64.rc"))
     check("service zygote " in z and "zygote_secondary" not in z, "zygote64 rc: " + z)
     rc_path = os.path.join(R, "system/product/etc/init/vine-rootless.rc")
@@ -372,34 +373,35 @@ def main():
           read(os.path.join(R, "vendor/lib64/hw/gralloc.default_real.so")) == "default gralloc\n", "gralloc shim installed")
     check("ro.sf.lcd_density=240" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density")
     check(os.access(os.path.join(R, "vendor/bin/hw/android.hardware.sensors@2.1-service.multihal"), os.X_OK) and
-          read(os.path.join(R, "vendor/lib64/hw/android.hardware.sensors@2.1-impl.ranchu.so")) == "sensors ranchu\n" and
+          read(os.path.join(R, "vendor/lib64/hw/sensors.ssc.so")) == "sensors ranchu\0TMD3719 Ambient Light\0x\n" and
           read(os.path.join(R, "vendor/lib64/android.hardware.sensors@2.0-ScopedWakelock.so")) == "sensors wakelock\n" and
-          read(os.path.join(R, "vendor/lib64/libvine_sensors_shim.so")) == "sensors shim\n", "sensors HAL installed")
+          read(os.path.join(R, "vendor/lib64/libsensorssc_ext.so")) == "sensors shim\n", "sensors HAL installed, a Pixel's names")
     check(read(os.path.join(R, "vendor/lib64/android.hardware.sensors@2.1.so")) == "image sensors 2.1\n" and
           read(os.path.join(R, "vendor/lib64/android.hardware.sensors@2.0.so")) == "image sensors 2.0\n",
           "sensors interface libraries are the image's")
-    check(read(os.path.join(R, "vendor/etc/sensors/hals.conf")) == "android.hardware.sensors@2.1-impl.ranchu.so\n", "hals.conf")
-    sensors_rc = read(os.path.join(R, "vendor/etc/init/vine-sensors.rc"))
+    check(read(os.path.join(R, "vendor/etc/sensors/hals.conf")) == "sensors.ssc.so\n", "hals.conf")
+    sensors_rc = read(os.path.join(R, "vendor/etc/init/android.hardware.sensors@2.1-service-multihal.rc"))
     check("service vendor.sensors-hal-2-1-multihal /vendor/bin/hw/android.hardware.sensors@2.1-service.multihal\n" in sensors_rc and
-          "setenv LD_PRELOAD /vendor/lib64/libvine_sensors_shim.so\n" in sensors_rc and "rlimit" not in sensors_rc, "sensors rc")
-    check("<version>2.1</version>" in read(os.path.join(R, "vendor/etc/vintf/manifest/vine-sensors.xml")), "sensors VINTF")
-    check(os.access(os.path.join(R, "vendor/bin/hw/libgoldfish-rild"), os.X_OK) and
-          read(os.path.join(R, "vendor/lib64/libcuttlefish-ril-2.so")) == "radio ril_cuttlefish\n" and
+          "setenv LD_PRELOAD /vendor/lib64/libsensorssc_ext.so\n" in sensors_rc and "rlimit" not in sensors_rc, "sensors rc")
+    check("<version>2.1</version>" in read(os.path.join(R, "vendor/etc/vintf/manifest/android.hardware.sensors@2.1-multihal.xml")),
+          "sensors VINTF")
+    check(os.access(os.path.join(R, "vendor/bin/hw/rild"), os.X_OK) and
+          read(os.path.join(R, "vendor/lib64/libril-qc-hal-qmi.so")) == "radio ril_cuttlefish\n" and
           read(os.path.join(R, "vendor/lib64/hw/android.hardware.radio-library.compat.so")) == "radio ril_compat\n" and
           read(os.path.join(R, "vendor/lib64/android.hardware.radio@1.6.so")) == "radio ril_radio_1_6\n" and
           read(os.path.join(R, "vendor/lib64/android.hardware.radio.deprecated@1.0.so")) == "radio ril_deprecated\n",
           "RIL installed")
     check(read(os.path.join(R, "vendor/lib64/android.hardware.radio@1.0.so")) == "image radio 1.0\n", "radio@1.0 is the image's")
     check(read(os.path.join(R, "vendor/overlay/framework-res__auto_generated_rro_vendor.apk")) == "radio telephony_overlay\n", "telephony overlay installed")
-    radio_rc = read(os.path.join(R, "vendor/etc/init/vine-radio.rc"))
-    check(radio_rc.startswith("service vendor.ril-daemon /vendor/bin/hw/libgoldfish-rild -l /vendor/lib64/libcuttlefish-ril-2.so\n")
-          and "user radio\n" in radio_rc and "setenv LD_PRELOAD /vendor/lib64/libvine_ril_shim.so\n" in radio_rc and
-          "setenv VINE_RIL_IMPL \"Qualcomm RIL 1.0\"\n" in radio_rc and "setenv VINE_BASEBAND g7250-" in radio_rc and
-          read(os.path.join(R, "vendor/lib64/libvine_ril_shim.so")) == "radio ril_shim\n", "RIL rc and shim: " + radio_rc)
-    radio_vintf = read(os.path.join(R, "vendor/etc/vintf/manifest/vine-radio.xml"))
+    radio_rc = read(os.path.join(R, "vendor/etc/init/rild.rc"))
+    check(radio_rc.startswith("service vendor.ril-daemon /vendor/bin/hw/rild -l /vendor/lib64/libril-qc-hal-qmi.so\n")
+          and "user radio\n" in radio_rc and "setenv LD_PRELOAD /vendor/lib64/libril-qcril-ext.so\n" in radio_rc and
+          "setenv RIL_IMPL_NAME \"Qualcomm RIL 1.0\"\n" in radio_rc and "setenv RIL_BASEBAND_VERSION g7250-" in radio_rc and
+          read(os.path.join(R, "vendor/lib64/libril-qcril-ext.so")) == "radio ril_shim\n", "RIL rc and shim: " + radio_rc)
+    radio_vintf = read(os.path.join(R, "vendor/etc/vintf/manifest/manifest_android.hardware.radio.xml"))
     check(radio_vintf.count("<hal format=\"aidl\">") == 7 and "<fqname>IRadioSim/slot1</fqname>" in radio_vintf and
           "<fqname>IRadioConfig/default</fqname>" in radio_vintf, "RIL VINTF")
-    check("android.hardware.telephony" in read(os.path.join(R, "vendor/etc/permissions/vine-telephony.xml")), "telephony feature")
+    check("android.hardware.telephony" in read(os.path.join(R, "vendor/etc/permissions/android.hardware.telephony.gsm.xml")), "telephony feature")
     check("ro.com.android.mobiledata=false\n" in read(os.path.join(R, "vendor/waydroid.prop")), "mobile data off")
     check(read(os.path.join(W, "modem.args")).split("\n")[:-1] ==
           ["--socket", "run/vine-modem", "--seed", name, "--sim-operator", "46000", "--sim-name", "中国移动",
@@ -416,7 +418,7 @@ def main():
     check(os.path.isdir(os.path.join(R, "dev/input")) and os.path.isfile(os.path.join(R, "dev/kmsg")), "dev dirs")
     check(os.path.getsize(os.path.join(W, "tawcroot/owners")) > 0, "ownership table")
     init_dir = os.path.join(R, "vendor/etc/init")
-    check(sorted(os.listdir(init_dir)) == ["audio.rc", "light.rc", "vine-radio.rc", "vine-sensors.rc"], "32-bit omx rc dropped: " + str(os.listdir(init_dir)))
+    check(sorted(os.listdir(init_dir)) == ["android.hardware.sensors@2.1-service-multihal.rc", "audio.rc", "light.rc", "rild.rc"], "32-bit omx rc dropped: " + str(os.listdir(init_dir)))
     man = read(os.path.join(R, "vendor/etc/vintf/manifest.xml"))
     check("media.omx" not in man and "<name>android.hardware.light</name>" in man and man.count("<hal") == 1, "manifest: " + man)
     check("media.omx" not in read(os.path.join(R, "vendor/etc/vintf/manifest/omx.xml")), "manifest fragment")
@@ -495,8 +497,8 @@ def main():
     R64 = os.path.join(inst64, "rootless/rootfs")
     check(not os.path.exists(os.path.join(R64, "vendor/bin/hw/vine_hal_service")), "no own audio HAL")
     check("vine_hal_service" not in read(os.path.join(R64, "system/product/etc/init/vine-rootless.rc")), "rc keeps the image's")
-    check(not os.path.exists(os.path.join(R64, "vendor/etc/init/vine-sensors.rc")), "no sensors HAL without the image's libraries")
-    check(not os.path.exists(os.path.join(R64, "vendor/etc/init/vine-radio.rc")) and
+    check(not os.path.exists(os.path.join(R64, "vendor/etc/init/android.hardware.sensors@2.1-service-multihal.rc")), "no sensors HAL without the image's libraries")
+    check(not os.path.exists(os.path.join(R64, "vendor/etc/init/rild.rc")) and
           "mobiledata" not in read(os.path.join(R64, "vendor/waydroid.prop")), "no RIL without the image's radio@1.0")
     check(read(os.path.join(inst64, "rootless/modem.args")).split("\n")[:-1] == ["--socket", "run/vine-modem", "--seed", name64],
           "no SIM passed: vine_modem without one")

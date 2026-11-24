@@ -243,15 +243,18 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
 
 // What Waydroid's host writes with no GPU device: software GLES (ANGLE on
 // lavapipe) over memfd-backed gralloc buffers. With the GPU, ANGLE runs
-// on gfxstream-vk and gralloc hands out host ColorBuffers. gralloc "vine"
-// (not "default") makes the hwcomposer pass buffers on by handle over
-// android_wlegl, so frames stay on the GPU. zygote must not preload the
+// on gfxstream-vk and gralloc hands out host ColorBuffers. That gralloc is
+// gralloc.redfin, found by ro.hardware with ro.hardware.gralloc unset as on
+// a Pixel; anything but "default" makes the hwcomposer pass buffers on by
+// handle over android_wlegl, so frames stay on the GPU. The Vulkan driver
+// goes by the Pixel's name too (apps read these props and map the files).
+// zygote must not preload the
 // driver, or its kumquat socket leaks into every fork and zygote's fd
 // check aborts.
 std::string waydroid_prop(int dpi, bool gpu) {
-    return std::string(gpu ? "ro.hardware.gralloc=vine\n" : "ro.hardware.gralloc=default\n") +
+    return std::string(gpu ? "" : "ro.hardware.gralloc=default\n") +
            "ro.hardware.egl=angle\n" +
-           (gpu ? "ro.hardware.vulkan=gfxstream\nro.vendor.vine.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
+           (gpu ? "ro.hardware.vulkan=adreno\nro.vendor.display.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
            "sys.use_memfd=true\n"
            // Codec2 takes linear buffers from DMA-BUF heaps, which apps
            // can't open: gralloc blobs instead (ION | BUFFERQUEUE | BLOB)
@@ -422,6 +425,44 @@ std::string zygote64_rc(const std::string& zygote64_32) {
 // The interface libraries are the image's own builds, not the
 // emulator's: Waydroid's libhidlbase adds a virtual to IBinder, and
 // stubs built against AOSP's call the wrong slot.
+// The emulator's sensor names and vendor, in the ranchu HAL's .rodata,
+// as the Pixel 5's parts (a CPU-Z listing; unverified on a device). Each
+// is a whole NUL-terminated string, the new one no longer: apps list the
+// sensors, and "Goldfish" names the emulator. The vendor string is one,
+// shared by every sensor.
+const std::pair<const char*, const char*> kSensorNames[] = {
+    {"Goldfish 3-axis Accelerometer", "LSM6DSR Accelerometer"},
+    {"Goldfish 3-axis Accelerometer Uncalibrated", "LSM6DSR Accelerometer Uncalibrated"},
+    {"Goldfish 3-axis Gyroscope", "LSM6DSR Gyroscope"},
+    {"Goldfish 3-axis Gyroscope (uncalibrated)", "LSM6DSR Gyroscope Uncalibrated"},
+    {"Goldfish 3-axis Magnetic field sensor", "MMC56X3X Magnetometer"},
+    {"Goldfish 3-axis Magnetic field sensor (uncalibrated)", "MMC56X3X Magnetometer Uncalibrated"},
+    {"Goldfish Proximity sensor", "TMD3719 Proximity"},
+    {"Goldfish Light sensor", "TMD3719 Ambient Light"},
+    {"Goldfish Pressure sensor", "ICP10101 Pressure"},
+    {"Goldfish Humidity sensor", "Humidity"},
+    {"Goldfish Ambient Temperature sensor", "Ambient Temperature"},
+    {"Goldfish Orientation sensor", "Orientation"},
+    {"Goldfish Heart rate sensor", "Heart Rate"},
+    {"Goldfish wrist tilt gesture sensor", "Wrist Tilt Gesture"},
+    {"Goldfish hinge sensor0 (in degrees)", "Hinge Angle 0"},
+    {"Goldfish hinge sensor1 (in degrees)", "Hinge Angle 1"},
+    {"Goldfish hinge sensor2 (in degrees)", "Hinge Angle 2"},
+    {"The Android Open Source Project", "STMicroelectronics"},
+};
+
+std::string with_sensor_names(std::string so) {
+    for (const auto& [from, to] : kSensorNames) {
+        const std::string f = std::string(1, '\0') + from + '\0';
+        for (size_t at = so.find(f); at != std::string::npos; at = so.find(f, at + 1)) {
+            std::string t = to;
+            t.resize(strlen(from), '\0');
+            so.replace(at + 1, t.size(), t);
+        }
+    }
+    return so;
+}
+
 bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::string* error) {
     const std::string multihal = lib_dir + "/libvine_sensors_multihal.so";
     const std::string ranchu = lib_dir + "/libvine_sensors_ranchu.so";
@@ -436,14 +477,20 @@ bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::
         if (!mkdirs_or_fail(V + d, error)) return false;
     }
     const std::string service = "/vendor/bin/hw/android.hardware.sensors@2.1-service.multihal";
+    // Earlier names
+    for (const char* old : {"/lib64/hw/android.hardware.sensors@2.1-impl.ranchu.so", "/lib64/libvine_sensors_shim.so",
+                            "/etc/init/vine-sensors.rc", "/etc/vintf/manifest/vine-sensors.xml"})
+        unlink((V + old).c_str());
+    const auto ranchu_so = read_file(ranchu);
+    if (!ranchu_so) return fail(error, "could not read " + ranchu);
     return copy_mode(multihal, R + service, 0755, error) &&
-           copy_mode(ranchu, V + "/lib64/hw/android.hardware.sensors@2.1-impl.ranchu.so", 0644, error) &&
+           write_mode(V + "/lib64/hw/sensors.ssc.so", with_sensor_names(*ranchu_so), 0644, error) &&
            copy_mode(wakelock, V + "/lib64/android.hardware.sensors@2.0-ScopedWakelock.so", 0644, error) &&
-           copy_mode(lib_dir + "/libvine_sensors_shim.so", V + "/lib64/libvine_sensors_shim.so", 0644, error) &&
+           copy_mode(lib_dir + "/libvine_sensors_shim.so", V + "/lib64/libsensorssc_ext.so", 0644, error) &&
            copy_mode(sys + "android.hardware.sensors@2.0.so", V + "/lib64/android.hardware.sensors@2.0.so", 0644, error) &&
            copy_mode(sys + "android.hardware.sensors@2.1.so", V + "/lib64/android.hardware.sensors@2.1.so", 0644, error) &&
-           write_mode(V + "/etc/sensors/hals.conf", "android.hardware.sensors@2.1-impl.ranchu.so\n", 0644, error) &&
-           write_mode(V + "/etc/vintf/manifest/vine-sensors.xml",
+           write_mode(V + "/etc/sensors/hals.conf", "sensors.ssc.so\n", 0644, error) &&
+           write_mode(V + "/etc/vintf/manifest/android.hardware.sensors@2.1-multihal.xml",
                       "<manifest version=\"1.0\" type=\"device\">\n"
                       "    <hal format=\"hidl\">\n"
                       "        <name>android.hardware.sensors</name>\n"
@@ -457,13 +504,13 @@ bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::
                       "</manifest>\n",
                       0644, error) &&
            // The emulator's rc, less its rtprio rlimit and task profile
-           write_mode(V + "/etc/init/vine-sensors.rc",
+           write_mode(V + "/etc/init/android.hardware.sensors@2.1-service-multihal.rc",
                       "service vendor.sensors-hal-2-1-multihal " + service + "\n"
                       "    class hal\n"
                       "    user system\n"
                       "    group system wakelock context_hub uhid\n"
                       "    capabilities BLOCK_SUSPEND\n"
-                      "    setenv LD_PRELOAD /vendor/lib64/libvine_sensors_shim.so\n",
+                      "    setenv LD_PRELOAD /vendor/lib64/libsensorssc_ext.so\n",
                       0644, error);
 }
 
@@ -473,9 +520,11 @@ bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::
 // emulator's but for radio@1.0 and 1.1, which the image has: unlike the
 // sensors HAL, the RIL serves the AIDL radio HALs and only uses its HIDL
 // types in-process.
+// Installed under a Qualcomm Pixel's names where apps could tell the
+// emulator's apart (they can stat these paths and read the rc)
 const std::pair<const char*, const char*> kRadioFiles[] = {
-    {"libvine_rild.so", "/bin/hw/libgoldfish-rild"},
-    {"libvine_ril_cuttlefish.so", "/lib64/libcuttlefish-ril-2.so"},
+    {"libvine_rild.so", "/bin/hw/rild"},
+    {"libvine_ril_cuttlefish.so", "/lib64/libril-qc-hal-qmi.so"},
     {"libvine_ril_modem.so", "/lib64/libril-modem-lib.so"},
     {"libvine_ril_compat.so", "/lib64/hw/android.hardware.radio-library.compat.so"},
     {"libvine_ril_cf_fs.so", "/lib64/libcuttlefish_fs.so"},
@@ -490,7 +539,7 @@ const std::pair<const char*, const char*> kRadioFiles[] = {
     {"libvine_ril_config_1_2.so", "/lib64/android.hardware.radio.config@1.2.so"},
     {"libvine_ril_config_1_3.so", "/lib64/android.hardware.radio.config@1.3.so"},
     {"libvine_ril_deprecated.so", "/lib64/android.hardware.radio.deprecated@1.0.so"},
-    {"libvine_ril_shim.so", "/lib64/libvine_ril_shim.so"},
+    {"libvine_ril_shim.so", "/lib64/libril-qcril-ext.so"},
     // scripts/radio/build-overlay.sh: without it the framework never uses the RIL
     {"libvine_telephony_overlay.so", "/overlay/framework-res__auto_generated_rro_vendor.apk"},
 };
@@ -512,6 +561,11 @@ bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* i
         if (!copy_mode(lib_dir + "/" + lib, V + path, std::string(path).rfind("/bin/", 0) == 0 ? 0755 : 0644, error))
             return false;
     }
+    // Earlier names
+    for (const char* old : {"/bin/hw/libgoldfish-rild", "/lib64/libcuttlefish-ril-2.so", "/lib64/libvine_ril_shim.so",
+                            "/etc/init/vine-radio.rc", "/etc/vintf/manifest/vine-radio.xml",
+                            "/etc/permissions/vine-telephony.xml"})
+        unlink((V + old).c_str());
     std::string manifest = "<manifest version=\"1.0\" type=\"device\">\n";
     for (const char* hal : {"config/IRadioConfig/default", "data/IRadioData/slot1", "messaging/IRadioMessaging/slot1",
                             "modem/IRadioModem/slot1", "network/IRadioNetwork/slot1", "sim/IRadioSim/slot1",
@@ -522,23 +576,23 @@ bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* i
                     "</name>\n        <fqname>" + h.substr(slash + 1) + "</fqname>\n    </hal>\n";
     }
     manifest += "</manifest>\n";
-    if (!write_mode(V + "/etc/vintf/manifest/vine-radio.xml", manifest, 0644, error) ||
+    if (!write_mode(V + "/etc/vintf/manifest/manifest_android.hardware.radio.xml", manifest, 0644, error) ||
         // The emulator's rc, with the RIL library named (without
         // ro.boot.qemu it is not found) and the shim that leads it to vine_modem
-        !write_mode(V + "/etc/init/vine-radio.rc",
-                    "service vendor.ril-daemon /vendor/bin/hw/libgoldfish-rild -l /vendor/lib64/libcuttlefish-ril-2.so\n"
+        !write_mode(V + "/etc/init/rild.rc",
+                    "service vendor.ril-daemon /vendor/bin/hw/rild -l /vendor/lib64/libril-qc-hal-qmi.so\n"
                     "    class main\n"
                     "    user radio\n"
                     "    group radio cache inet misc audio log readproc wakelock\n"
-                    "    setenv LD_PRELOAD /vendor/lib64/libvine_ril_shim.so\n"
+                    "    setenv LD_PRELOAD /vendor/lib64/libril-qcril-ext.so\n"
                     // The Pixel 5's in place of reference-ril's. Unverified on
                     // a device: the baseband is TQ1A.230105.001's (AT&T's
                     // update notes), not TQ3A.230901.001's
-                    "    setenv VINE_RIL_IMPL \"Qualcomm RIL 1.0\"\n"
-                    "    setenv VINE_BASEBAND g7250-00220-221017-B-9183951\n",
+                    "    setenv RIL_IMPL_NAME \"Qualcomm RIL 1.0\"\n"
+                    "    setenv RIL_BASEBAND_VERSION g7250-00220-221017-B-9183951\n",
                     0644, error) ||
         // A phone's: apps check for it before they read the SIM
-        !write_mode(V + "/etc/permissions/vine-telephony.xml",
+        !write_mode(V + "/etc/permissions/android.hardware.telephony.gsm.xml",
                     "<permissions>\n"
                     "    <feature name=\"android.hardware.telephony\" />\n"
                     "    <feature name=\"android.hardware.telephony.gsm\" />\n"
@@ -571,6 +625,7 @@ const char* const kForeignApps[] = {
     "/system/product/app/Recorder",            "/system/product/app/ApertureLensLauncher",
     "/system/product/priv-app/Eleven",         "/system/product/overlay/FontRubik",
     "/system/product/overlay/FontLato",        "/system/product/overlay/LineageBlackTheme",
+    "/system/product/overlay/LineageNavigationBarNoHint",
     "/system/system_ext/app/Profiles",         "/system/system_ext/priv-app/WaydroidUpdater",
     "/system/system_ext/priv-app/Seedvault",
 };
@@ -1015,19 +1070,25 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!write_mode(R + "/vendor/waydroid.prop",
                     waydroid_prop(o.dpi, o.gpu) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
         return false;
-    // gralloc reads ro.vendor.vine.gpu in every app, and tawcroot denies
+    // gralloc reads ro.vendor.display.gpu in every app, and tawcroot denies
     // apps the vendor_default_prop area that "ro.vendor." falls in
     const std::string vendor_prop_contexts = R + "/vendor/etc/selinux/vendor_property_contexts";
     if (const auto text = read_file(vendor_prop_contexts)) {
         std::string t = *text;
         if (!t.empty() && t.back() != '\n') t += "\n";
-        if (t.find("\nro.vendor.vine.gpu ") == std::string::npos)
-            t += "ro.vendor.vine.gpu u:object_r:exported_default_prop:s0 exact bool\n";
+        if (t.find("\nro.vendor.display.gpu ") == std::string::npos)
+            t += "ro.vendor.display.gpu u:object_r:exported_default_prop:s0 exact bool\n";
         if (t.find("\nwaydroid. ") == std::string::npos) t += kHiddenPropContexts;
         if (t != *text && !write_mode(vendor_prop_contexts, t, 0644, error)) return false;
     }
-    if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||
-                  !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))
+    // Earlier names, and the GPU's files when it is off
+    for (const char* old : {"/vulkan.gfxstream.so", "/gralloc.vine.so"}) unlink((hw + old).c_str());
+    if (!o.gpu) {
+        unlink((hw + "/vulkan.adreno.so").c_str());
+        unlink((hw + "/gralloc.redfin.so").c_str());
+    }
+    if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.adreno.so", 0644, error) ||
+                  !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.redfin.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
     if (!install_device_hals(R, error) || !remove_foreign_apps(R, error)) return false;

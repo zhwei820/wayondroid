@@ -11,7 +11,7 @@
  * row pitch against gralloc's tight one), every multiple-of-4 surface
  * fine.
  *
- * With ro.vendor.vine.gpu=1 the guest renders through gfxstream and
+ * With ro.vendor.display.gpu=1 the guest renders through gfxstream and
  * buffers are host ColorBuffers instead (gralloc_gpu.c).
  *
  * Everything else forwards to the original, moved to
@@ -207,7 +207,7 @@ __attribute__((visibility("default"))) gralloc_module_t HMI = {
  * through perform() when a module has one. */
 __attribute__((constructor)) static void init(void) {
     char v[PROP_VALUE_MAX] = "";
-    if (__system_property_get("ro.vendor.vine.gpu", v) > 0 && !strcmp(v, "1")) {
+    if (__system_property_get("ro.vendor.display.gpu", v) > 0 && !strcmp(v, "1")) {
         gpu = 1;
         HMI.lock_ycbcr = shim_lock_ycbcr;
         return;

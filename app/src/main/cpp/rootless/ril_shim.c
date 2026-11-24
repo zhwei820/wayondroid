@@ -9,7 +9,7 @@
  * /run/user/1000/vine-modem.
  *
  * The RIL's name (gsm.version.ril-impl) and baseband version are fixed
- * strings that say "reference-ril"; VINE_RIL_IMPL and VINE_BASEBAND
+ * strings that say "reference-ril"; RIL_IMPL_NAME and RIL_BASEBAND_VERSION
  * (the rc's setenv) replace them. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -97,8 +97,8 @@ EXPORT void RIL_register(const RIL_RadioFunctions* funcs)
 {
     register_fn real = (register_fn)dlsym(RTLD_NEXT, "RIL_register");
     s_complete = (complete_fn)dlsym(RTLD_NEXT, "RIL_onRequestComplete");
-    s_impl = getenv("VINE_RIL_IMPL");
-    s_baseband = getenv("VINE_BASEBAND");
+    s_impl = getenv("RIL_IMPL_NAME");
+    s_baseband = getenv("RIL_BASEBAND_VERSION");
     if (!funcs) {
         real(funcs);
         return;
