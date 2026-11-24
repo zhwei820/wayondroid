@@ -478,8 +478,9 @@ const std::pair<const char*, const char*> kVulkanStrings[] = {
     {"gfxstream", "Adreno"},
     {"Mesa " "25.3.6 (git-06f9e28304)", ""},
     {"Goldfish GFXStream", ""},
-    // The SONAME, which dlopen(RTLD_NOLOAD) finds the loaded driver by
-    {"libvulkan_gfxstream.so", "vulkan.adreno.so"},
+    // The SONAME, which dlopen(RTLD_NOLOAD) finds the loaded driver by;
+    // the HAL in front of it (vulkan_hal_shim.c) is vulkan.adreno.so
+    {"libvulkan_gfxstream.so", "libadreno_utils.so"},
 };
 
 // The emulator's sensor names and vendor, in the ranchu HAL's .rodata,
@@ -1289,10 +1290,14 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     for (const char* old : {"/vulkan.gfxstream.so", "/gralloc.vine.so"}) unlink((hw + old).c_str());
     if (!o.gpu) {
         unlink((hw + "/vulkan.adreno.so").c_str());
+        unlink((R + "/vendor/lib64/libadreno_utils.so").c_str());
         unlink((hw + "/gralloc.redfin.so").c_str());
     }
+    // gfxstream's driver behind vulkan_hal_shim.c, which names the Pixel 5's GPU
     const auto vk = o.gpu ? read_file(o.lib_dir + "/libvine_vk_gfxstream.so") : std::nullopt;
-    if (o.gpu && (!vk || !write_mode(hw + "/vulkan.adreno.so", replace_cstrings(*vk, kVulkanStrings), 0644, error) ||
+    if (o.gpu && (!vk || !write_mode(R + "/vendor/lib64/libadreno_utils.so", replace_cstrings(*vk, kVulkanStrings), 0644,
+                                     error) ||
+                  !copy_mode(o.lib_dir + "/libvine_vulkan_hal.so", hw + "/vulkan.adreno.so", 0644, error) ||
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.redfin.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;

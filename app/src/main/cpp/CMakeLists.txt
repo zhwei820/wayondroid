@@ -127,7 +127,16 @@ target_link_options(vine_hal_service PRIVATE -pie -static-libstdc++ -Wl,-z,max-p
 add_library(vine_gralloc SHARED rootless/gralloc_shim.c rootless/gralloc_gpu.c)
 target_compile_options(vine_gralloc PRIVATE -fvisibility=hidden)
 target_link_libraries(vine_gralloc PRIVATE dl)
-target_link_options(vine_gralloc PRIVATE -Wl,-z,max-page-size=16384)
+# Installed as gralloc.redfin.so, which apps map: named that way inside too (dlopen RTLD_NOLOAD finds a library by it)
+target_link_options(vine_gralloc PRIVATE -Wl,-z,max-page-size=16384 -Wl,-soname,gralloc.redfin.so)
+set_target_properties(vine_gralloc PROPERTIES NO_SONAME TRUE)
+
+# Copied into the guest as its Vulkan HAL, vulkan.adreno.so, in front of gfxstream's driver; apps map it
+add_library(vine_vulkan_hal SHARED rootless/vulkan_hal_shim.c)
+target_compile_options(vine_vulkan_hal PRIVATE -fvisibility=hidden)
+target_link_libraries(vine_vulkan_hal PRIVATE dl)
+target_link_options(vine_vulkan_hal PRIVATE -Wl,-z,max-page-size=16384 -Wl,-soname,vulkan.adreno.so)
+set_target_properties(vine_vulkan_hal PROPERTIES NO_SONAME TRUE)
 
 # Preloaded into the guest's vold: emulated storage without FUSE
 add_library(vine_vold_shim SHARED rootless/vold_fuse_shim.c)

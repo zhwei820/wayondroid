@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
 public class Main extends Activity {
     static final Pattern MARK = Pattern.compile(
             "(?i)waydroid|lineage|goldfish|ranchu|qemu|cuttlefish|vsoc|gfxstream|virtio|tawc|vine|emulator|"
-                    + "genymotion|anbox|redroid|ColorOS|oplus|hexadecinull|reference-ril");
+                    + "genymotion|anbox|redroid|ColorOS|oplus|hexadecinull|reference-ril|kumquat|lavapipe|llvmpipe|LP_NUM_THREADS|mesa");
     final StringBuilder out = new StringBuilder();
 
     void put(String k, Object v) {
@@ -233,6 +233,21 @@ public class Main extends Activity {
             for (String n : names == null ? new String[0] : names) if (MARK.matcher(n).find()) m.append(n).append(' ');
             put("ls." + d, names == null ? "unreadable" : names.length + " entries " + m);
         }
+        // Listed whole: what a phone has there is known
+        for (String d : new String[] {"/run", "/run/user/1000", "/dev/socket", "/dev"}) {
+            String[] names = new File(d).list();
+            if (names != null) java.util.Arrays.sort(names);
+            put("dir." + d, names == null ? "unreadable" : String.join(" ", names));
+        }
+        // The environment, less what every Android app process has
+        StringBuilder env = new StringBuilder();
+        for (java.util.Map.Entry<String, String> e : new java.util.TreeMap<>(System.getenv()).entrySet()) {
+            if (!e.getKey().matches("PATH|ANDROID_.*|BOOTCLASSPATH|DEX2OATBOOTCLASSPATH|SYSTEMSERVERCLASSPATH|"
+                    + "STANDALONE_SYSTEMSERVER_JARS|EXTERNAL_STORAGE|ASEC_MOUNTPOINT|DOWNLOAD_CACHE")) {
+                env.append(e.getKey()).append('=').append(e.getValue()).append(' ');
+            }
+        }
+        put("env.extra", env);
         for (String f : new String[] {"/vendor/waydroid.prop", "/system/etc/init/init.waydroid.rc", "/product/etc/vine",
                 "/system/bin/vine_lmkd", "/vendor/lib64/libcuttlefish_fs.so", "/system/addon.d/50-lineage.sh"}) {
             put("exists." + f, new File(f).exists());
