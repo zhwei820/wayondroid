@@ -136,8 +136,25 @@ def front_camera(data):
     return pixel5_camera(_back["data"], "front")
 
 
+# EmulatedCameraDeviceSessionHwlImpl::ConfigurePipeline gives an
+# IMPLEMENTATION_DEFINED stream (a preview) YCBCR_420_888 buffers, which the
+# emulator's host composes; the guest's SurfaceFlinger can't import them
+# (gfxstream exports no AHardwareBuffer for them) and aborts. Here they are
+# RGBA_8888, which EmulatedSensor fills with CaptureRGB. arm64: the
+# `mov w8, #0x23` among its neighbours becomes `mov w8, #0x1`.
+HWL_PREVIEW_FROM = bytes.fromhex("bf8a0071810200546804805205000014e803152a")
+HWL_PREVIEW_TO = bytes.fromhex("bf8a0071810200542800805205000014e803152a")
+
+
+def rgba_previews(data):
+    if data.count(HWL_PREVIEW_FROM) != 1:
+        return data
+    return data.replace(HWL_PREVIEW_FROM, HWL_PREVIEW_TO)
+
+
 # Applied after the hash check
-TRANSFORMS = {"libvine_cam_back.so": back_camera, "libvine_cam_front.so": front_camera}
+TRANSFORMS = {"libvine_cam_back.so": back_camera, "libvine_cam_front.so": front_camera,
+              "libvine_cam_hwl.so": rgba_previews}
 SHA256 = {
     "arm64-v8a": {
         "libvine_sensors_multihal.so": "1bd233fe6eb76a161c5f3a08ead60f10053ff3ab79f9b26b2777ded7ddf6ad15",
