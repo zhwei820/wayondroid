@@ -220,29 +220,6 @@ static void patch_table(void)
     }
 }
 
-typedef const struct sensor_info* (*info_fn)(int);
-
-/* The sub-HAL polls, at the sampling rate, every active sensor that
- * isn't on-change (MultihalSensors::activate), and the framework gives a
- * one-shot sensor no rate: significant motion would spin it. Only the
- * list the framework gets (getSensorsList_2_1) has its one-shot flags;
- * the sub-HAL's own lookups see an on-change sensor. */
-EXPORT const struct sensor_info* _ZN8goldfish21getSensorInfoByHandleEi(int handle)
-{
-    static info_fn real;
-    if (!real) real = (info_fn)dlsym(RTLD_NEXT, "_ZN8goldfish21getSensorInfoByHandleEi");
-    const struct sensor_info* s = real ? real(handle) : NULL;
-    if (!s || handle != kHinge2 || s->type != kTypeSignificantMotion) return s;
-    Dl_info caller;
-    if (dladdr(__builtin_return_address(0), &caller) && caller.dli_sname &&
-        strstr(caller.dli_sname, "getSensorsList"))
-        return s;
-    static struct sensor_info on_change;
-    on_change = *s;
-    on_change.flags = (s->flags & kWakeUp) | kOnChange;
-    return &on_change;
-}
-
 typedef void (*post_fn)(void*, const struct event*);
 
 /* vine_sensors sends hinge angles: the step count, and for the detector
