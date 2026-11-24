@@ -31,6 +31,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define EXPORT __attribute__((visibility("default")))
@@ -162,6 +163,7 @@ static void set_str(struct hstr* h, const char* text)
 }
 
 static char subhal_path[256];
+static struct sensor_info* table; /* the sub-HAL's, once patched */
 
 static int find_table(struct dl_phdr_info* info, size_t size, void* out)
 {
@@ -202,6 +204,7 @@ static void patch_table(void)
     struct sensor_info* t = NULL;
     dl_iterate_phdr(find_table, &t);
     if (!t) return;
+    table = t;
     set_str(&t[kPressure].vendor, "Bosch");
     set_str(&t[kProximity].vendor, "AMS");
     set_str(&t[kLight].vendor, "AMS");
@@ -224,24 +227,84 @@ static void patch_table(void)
 }
 
 typedef void (*post_fn)(void*, const struct event*);
+typedef void (*info_fn)(void*, int);
+typedef void (*post_locked_fn)(void*, const struct sensor_info*, const struct event*);
 
 #define POST_SENSOR_EVENT _ZN8goldfish15MultihalSensors15postSensorEventERKN7android8hardware7sensors4V2_15EventE
+#define SEND_INFO_REPORT _ZN8goldfish15MultihalSensors24sendAdditionalInfoReportEi
+#define POST_LOCKED \
+    _ZN8goldfish15MultihalSensors23doPostSensorEventLockedERKN7android8hardware7sensors4V2_110SensorInfoERKNS4_5EventE
 #define STR2(x) #x
 #define STR(x) STR2(x)
 EXPORT void POST_SENSOR_EVENT(void* self, const struct event* e);
+EXPORT void SEND_INFO_REPORT(void* self, int handle);
 
 /* The sub-HAL is dlopen()ed after this preload, outside its search scope:
  * RTLD_NEXT finds nothing, so look in the sub-HAL itself */
+static void* subhal_sym(const char* name, void* self_fn)
+{
+    void* fn = NULL;
+    void* h = subhal_path[0] ? dlopen(subhal_path, RTLD_NOW | RTLD_NOLOAD) : NULL;
+    if (h) fn = dlsym(h, name);
+    if (!fn) fn = dlsym(RTLD_NEXT, name);
+    return fn == self_fn ? NULL : fn;
+}
+
 static post_fn real_post(void)
 {
     static post_fn real;
-    if (real) return real;
-    post_fn fn = NULL;
-    void* h = subhal_path[0] ? dlopen(subhal_path, RTLD_NOW | RTLD_NOLOAD) : NULL;
-    if (h) fn = (post_fn)dlsym(h, STR(POST_SENSOR_EVENT));
-    if (!fn) fn = (post_fn)dlsym(RTLD_NEXT, STR(POST_SENSOR_EVENT));
-    if (fn == POST_SENSOR_EVENT) fn = NULL;
-    return real = fn;
+    if (!real) real = (post_fn)subhal_sym(STR(POST_SENSOR_EVENT), (void*)POST_SENSOR_EVENT);
+    return real;
+}
+
+/* On-change sensors report their current value when activated (the CDD's
+ * rule; the framework only replays it to clients that join an active
+ * sensor). The sub-HAL posts a value only when the host's changes and drops
+ * it while the sensor is off, so the last one is kept here and posted from
+ * activate(), which calls sendAdditionalInfoReport with the HAL's lock held
+ * (flush() does too, after its flush-complete event: a repeat is harmless). */
+static pthread_mutex_t last_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct event last[kSensors];
+static bool have_last[kSensors];
+
+static bool on_change(int handle)
+{
+    return table && handle >= 0 && handle < kSensors && ((table[handle].flags >> 1) & 7) == 1;
+}
+
+static void remember(const struct event* e)
+{
+    if (!on_change(e->handle)) return;
+    pthread_mutex_lock(&last_lock);
+    last[e->handle] = *e;
+    have_last[e->handle] = true;
+    pthread_mutex_unlock(&last_lock);
+}
+
+EXPORT void SEND_INFO_REPORT(void* self, int handle)
+{
+    static info_fn real;
+    static post_locked_fn post_locked;
+    if (!real) real = (info_fn)subhal_sym(STR(SEND_INFO_REPORT), (void*)SEND_INFO_REPORT);
+    if (!post_locked) post_locked = (post_locked_fn)subhal_sym(STR(POST_LOCKED), NULL);
+    if (real) real(self, handle);
+    if (!post_locked || !on_change(handle)) return;
+    struct event e;
+    pthread_mutex_lock(&last_lock);
+    const bool have = have_last[handle];
+    e = last[handle];
+    pthread_mutex_unlock(&last_lock);
+    if (!have) {
+        if (handle != kHinge0) return;
+        /* no step since the guest booted */
+        memset(&e, 0, sizeof e);
+        e.handle = kHinge0;
+        e.type = kTypeStepCounter;
+    }
+    struct timespec now;
+    clock_gettime(CLOCK_BOOTTIME, &now); /* elapsedRealtimeNano(), the sub-HAL's clock */
+    e.timestamp = (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+    post_locked(self, &table[handle], &e);
 }
 
 /* vine_sensors sends hinge angles: the step count, and for the detector
@@ -252,6 +315,7 @@ EXPORT void POST_SENSOR_EVENT(void* self, const struct event* e)
     const post_fn real = real_post();
     if (!real) return;
     if (e->type != kTypeHinge || e->handle < kHinge0 || e->handle > kHinge2) {
+        remember(e);
         real(self, e);
         return;
     }
@@ -264,6 +328,7 @@ EXPORT void POST_SENSOR_EVENT(void* self, const struct event* e)
         out.type = e->handle == kHinge1 ? kTypeStepDetector : kTypeSignificantMotion;
         out.u.data[0] = 1.0f;
     }
+    remember(&out);
     real(self, &out);
 }
 

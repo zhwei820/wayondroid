@@ -173,6 +173,7 @@ const char kCaptivePortalUrls[] =
 // The Bluetooth name and address a phone's settings hold, which
 // BluetoothManagerService reports while the adapter is off. Before
 // that service starts on most boots; on the first, on the next.
+// Likewise hide_error_dialogs.
 std::string device_settings_sh(const std::string& bt_mac) {
     return "#!/system/bin/sh\n"
            "i=0\n"
@@ -181,7 +182,12 @@ std::string device_settings_sh(const std::string& bt_mac) {
            "    sleep 0.2\n"
            "done\n"
            "cmd settings put secure bluetooth_address " + bt_mac + "\n"
-           "cmd settings put secure bluetooth_addr_valid 1\n";
+           "cmd settings put secure bluetooth_addr_valid 1\n"
+           // No system error dialogs (ActivityTaskManager's mShowDialogs): the
+           // boot-time "internal problem with your device" one (its VINTF
+           // check fails on the guest's Waydroid vendor manifest and on the
+           // kernel config apps can't read), nor crash and ANR dialogs
+           "cmd settings put global hide_error_dialogs 1\n";
 }
 
 std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
