@@ -577,6 +577,83 @@ bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::
                       0644, error);
 }
 
+// Google's camera HAL with the emulator's sensor HWL
+// (scripts/sensors/fetch-hal.py): a back and a front camera that render a
+// test scene, configured by the JSON files (without ro.boot.qemu it reads
+// them all; the depth camera's is left out, as a Pixel 5 has none). The
+// image has no camera HAL; without the prebuilts it gets none.
+const std::pair<const char*, const char*> kCameraFiles[] = {
+    {"libvine_cam_provider.so", "/bin/hw/android.hardware.camera.provider@2.7-service-google"},
+    {"libvine_cam_hal.so", "/lib64/libgooglecamerahal.so"},
+    {"libvine_cam_halutils.so", "/lib64/libgooglecamerahalutils.so"},
+    {"libvine_cam_hwl.so", "/lib64/libgooglecamerahwl_impl.so"},
+    {"libvine_cam_profiler.so", "/lib64/lib_profiler.so"},
+    {"libvine_cam_meminfo.so", "/lib64/libmeminfo.so"},
+    {"libvine_cam_grallocusage.so", "/lib64/libgrallocusage.so"},
+    {"libvine_cam_thermal_2_0.so", "/lib64/android.hardware.thermal@2.0.so"},
+    {"libvine_cam_thermal_1_0.so", "/lib64/android.hardware.thermal@1.0.so"},
+    {"libvine_cam_back.so", "/etc/config/emu_camera_back.json"},
+    {"libvine_cam_front.so", "/etc/config/emu_camera_front.json"},
+};
+
+// The HAL's configurations: apps have no use for them, and the names say emulator
+const char* const kCameraHidden[] = {"/vendor/etc/config/emu_camera_back.json", "/vendor/etc/config/emu_camera_front.json"};
+
+// What the cameras support, in AOSP's feature files under their names (a
+// Pixel's /vendor/etc/permissions has the same four)
+const std::pair<const char*, const char*> kCameraFeatures[] = {
+    {"android.hardware.camera.flash-autofocus.xml",
+     "android.hardware.camera\0android.hardware.camera.autofocus\0android.hardware.camera.flash\0"},
+    {"android.hardware.camera.front.xml", "android.hardware.camera.front\0"},
+    {"android.hardware.camera.full.xml",
+     "android.hardware.camera.any\0android.hardware.camera.level.full\0"
+     "android.hardware.camera.capability.manual_sensor\0android.hardware.camera.capability.manual_post_processing\0"},
+    {"android.hardware.camera.raw.xml", "android.hardware.camera.capability.raw\0"},
+};
+
+bool install_camera_hal(const std::string& R, const std::string& lib_dir, bool* installed, std::string* error) {
+    *installed = false;
+    for (const auto& [lib, path] : kCameraFiles) {
+        if (!is_regular_file(lib_dir + "/" + lib)) return true;
+    }
+    const std::string V = R + "/vendor";
+    for (const char* d : {"/bin/hw", "/lib64", "/etc/init", "/etc/config", "/etc/vintf/manifest", "/etc/permissions"}) {
+        if (!mkdirs_or_fail(V + d, error)) return false;
+    }
+    for (const auto& [lib, path] : kCameraFiles) {
+        if (!copy_mode(lib_dir + "/" + lib, V + path, std::string(path).rfind("/bin/", 0) == 0 ? 0755 : 0644, error))
+            return false;
+    }
+    for (const auto& [file, features] : kCameraFeatures) {
+        std::string xml = "<permissions>\n";
+        for (const char* f = features; *f; f += strlen(f) + 1) xml += std::string("    <feature name=\"") + f + "\" />\n";
+        if (!write_mode(V + "/etc/permissions/" + file, xml + "</permissions>\n", 0644, error)) return false;
+    }
+    if (!write_mode(V + "/etc/vintf/manifest/android.hardware.camera.provider@2.7-service-google.xml",
+                    "<manifest version=\"1.0\" type=\"device\">\n"
+                    "    <hal format=\"aidl\">\n"
+                    "        <name>android.hardware.camera.provider</name>\n"
+                    "        <version>1</version>\n"
+                    "        <interface>\n"
+                    "            <name>ICameraProvider</name>\n"
+                    "            <instance>internal/0</instance>\n"
+                    "        </interface>\n"
+                    "    </hal>\n"
+                    "</manifest>\n",
+                    0644, error) ||
+        // The emulator's rc, less its rtprio rlimit and task profiles
+        !write_mode(V + "/etc/init/android.hardware.camera.provider@2.7-service-google.rc",
+                    "service vendor.camera-provider-2-7-google /vendor/bin/hw/android.hardware.camera.provider@2.7-service-google\n"
+                    "    class hal\n"
+                    "    user system\n"
+                    "    group system\n"
+                    "    capabilities SYS_NICE\n",
+                    0644, error))
+        return false;
+    *installed = true;
+    return true;
+}
+
 // The emulator's RIL (scripts/sensors/fetch-hal.py) and its shim, on
 // vine_modem's socket, and an overlay that lets the framework use it. The image has none, so telephony sees no SIM without it; without
 // the prebuilts nothing changes. Its interface libraries are the
@@ -798,13 +875,12 @@ bool write_device_view(const std::string& store, std::string* error) {
 }
 
 // The Pixel 5's hardware features where Waydroid's differ: no camera
-// (none is served; declaring one that won't open is worse than none),
+// without the camera HAL (declaring one that won't open is worse than none),
 // Bluetooth LE. LineageOS's TERMINFO would be in every app's environment.
-bool apply_device_features(const std::string& R, std::string* error) {
+bool apply_device_features(const std::string& R, bool camera, std::string* error) {
     const std::string P = R + "/vendor/etc/permissions";
-    for (const char* f : {"/android.hardware.camera.flash-autofocus.xml", "/android.hardware.camera.front.xml",
-                          "/android.hardware.camera.full.xml", "/android.hardware.camera.raw.xml"})
-        unlink((P + f).c_str());
+    for (const auto& [f, features] : kCameraFeatures)
+        if (!camera) unlink((P + "/" + f).c_str());
     const std::pair<const char*, const char*> drop[] = {
         {"/vendor/etc/permissions/handheld_core_hardware.xml", "    <feature name=\"android.hardware.camera\" />\n"},
         {"/system/system_ext/etc/init/init.lineage-system_ext.rc", "    export TERMINFO /system_ext/etc/terminfo\n"},
@@ -1491,12 +1567,16 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.redfin.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
+    bool camera = false;
+    if (!install_camera_hal(R, o.lib_dir, &camera, error)) return false;
     if (!install_gles_shim(R, o.lib_dir, error)) return false;
-    std::string angle_hidden;
+    std::string extra_hidden;
     if (o.gpu) {
-        for (const char* f : kAngleHidden) angle_hidden += std::string(f) + "\n";
+        for (const char* f : kAngleHidden) extra_hidden += std::string(f) + "\n";
     }
-    if (!id.empty() && !apply_device_features(R, error)) return false;
+    if (camera)
+        for (const char* f : kCameraHidden) extra_hidden += std::string(f) + "\n";
+    if (!id.empty() && !apply_device_features(R, camera, error)) return false;
     if (!patch_health_hal(R, error)) return false;
     if (id.empty() ? !remove_if_exists(l.store + "/device", error) : !write_device_view(l.store, error)) return false;
     // The guest's /sys/class/power_supply, which VineVMManager fills from
@@ -1504,7 +1584,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!mkdirs_or_fail(l.work + "/power_supply", error) || chmod((l.work + "/power_supply").c_str(), 0755) != 0)
         return fail_errno(error, "chmod power_supply");
     if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) ||
-        !write_mode(l.store + "/app-hidden", app_hidden_list(R) + angle_hidden, 0644, error) ||
+        !write_mode(l.store + "/app-hidden", app_hidden_list(R) + extra_hidden, 0644, error) ||
         !std::all_of(std::begin(kPatchedJars), std::end(kPatchedJars),
                      [&](const char* jar) { return patch_guest_jar(l, o.lib_dir, jar, error); }))
         return false;

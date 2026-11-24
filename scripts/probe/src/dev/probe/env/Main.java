@@ -299,6 +299,7 @@ public class Main extends Activity {
             android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
             put("camera.ids", String.join(",", cm.getCameraIdList()));
         } catch (Exception e) { put("camera.ids", "ERR " + e); }
+        for (String camId : new String[] {"0", "1"}) put("camera.capture." + camId, capture(camId));
         StringBuilder feat = new StringBuilder();
         for (android.content.pm.FeatureInfo fi : getPackageManager().getSystemAvailableFeatures())
             if (fi.name != null && fi.name.matches(".*(camera|bluetooth|nfc|fingerprint).*")) feat.append(fi.name).append(' ');
@@ -325,6 +326,63 @@ public class Main extends Activity {
         put("Build.BOOTLOADER", Build.BOOTLOADER);
         put("prop.revision", prop("ro.revision") + " hw=" + prop("ro.boot.hardware.revision") + " bootmode=" + prop("ro.bootmode"));
         put("gl.egl.prop", prop("ro.hardware.egl"));
+    }
+
+    /** Opens a camera and takes one 640x480 JPEG: "jpeg <bytes> <w>x<h>" or what failed */
+    String capture(String id) {
+        android.os.HandlerThread ht = new android.os.HandlerThread("cam" + id);
+        ht.start();
+        android.os.Handler h = new android.os.Handler(ht.getLooper());
+        final String[] result = {"timeout"};
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        final android.hardware.camera2.CameraDevice[] dev = {null};
+        try {
+            android.hardware.camera2.CameraManager cm = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
+            final android.media.ImageReader reader = android.media.ImageReader.newInstance(640, 480, android.graphics.ImageFormat.JPEG, 2);
+            reader.setOnImageAvailableListener(r -> {
+                android.media.Image img = r.acquireLatestImage();
+                if (img != null) {
+                    java.nio.ByteBuffer b = img.getPlanes()[0].getBuffer();
+                    byte[] jpeg = new byte[b.remaining()];
+                    b.get(jpeg);
+                    android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+                    result[0] = "jpeg " + jpeg.length + " " + (bm == null ? "undecodable" : bm.getWidth() + "x" + bm.getHeight()
+                            + " px(320,240)=" + Integer.toHexString(bm.getPixel(320, 240)));
+                    img.close();
+                    done.countDown();
+                }
+            }, h);
+            cm.openCamera(id, new android.hardware.camera2.CameraDevice.StateCallback() {
+                @Override public void onOpened(android.hardware.camera2.CameraDevice d) {
+                    dev[0] = d;
+                    try {
+                        d.createCaptureSession(java.util.Collections.singletonList(reader.getSurface()),
+                                new android.hardware.camera2.CameraCaptureSession.StateCallback() {
+                                    @Override public void onConfigured(android.hardware.camera2.CameraCaptureSession sess) {
+                                        try {
+                                            android.hardware.camera2.CaptureRequest.Builder rb =
+                                                    d.createCaptureRequest(android.hardware.camera2.CameraDevice.TEMPLATE_STILL_CAPTURE);
+                                            rb.addTarget(reader.getSurface());
+                                            sess.capture(rb.build(), null, h);
+                                        } catch (Exception e) { result[0] = "capture " + e; done.countDown(); }
+                                    }
+                                    @Override public void onConfigureFailed(android.hardware.camera2.CameraCaptureSession sess) {
+                                        result[0] = "configure failed"; done.countDown();
+                                    }
+                                }, h);
+                    } catch (Exception e) { result[0] = "session " + e; done.countDown(); }
+                }
+                @Override public void onDisconnected(android.hardware.camera2.CameraDevice d) { result[0] = "disconnected"; done.countDown(); }
+                @Override public void onError(android.hardware.camera2.CameraDevice d, int e) { result[0] = "error " + e; done.countDown(); }
+            }, h);
+            done.await(15, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception e) {
+            result[0] = "ERR " + e;
+        } finally {
+            if (dev[0] != null) dev[0].close();
+            ht.quitSafely();
+        }
+        return result[0];
     }
 
     static String grep(String text, String re) {

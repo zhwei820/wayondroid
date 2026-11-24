@@ -10,6 +10,8 @@ into <out>/<abi>/:
   libvine_sensors_wakelock.so  android.hardware.sensors@2.0-ScopedWakelock.so
   libvine_rild.so, libvine_ril_*.so  libgoldfish-rild, libcuttlefish-ril-2.so
                                and the libraries it needs that Waydroid lacks
+  libvine_cam_*.so             Google's camera HAL (emulated sensor), its
+                               libraries Waydroid lacks and its configurations
 rootless_prep installs each set into the guest's /vendor when it is all there.
 
 Only vendor.img is downloaded (HTTP ranges into the 1.7 GB zip); its
@@ -54,7 +56,36 @@ FILES = {
     "libvine_ril_config_1_2.so": "/lib64/android.hardware.radio.config@1.2.so",
     "libvine_ril_config_1_3.so": "/lib64/android.hardware.radio.config@1.3.so",
     "libvine_ril_deprecated.so": "/lib64/android.hardware.radio.deprecated@1.0.so",
+    # Keep in step with kCameraFiles in rootless_prep.cpp: Google's camera HAL
+    # with the emulated sensor HWL, which renders a test scene, and what it
+    # needs that Waydroid lacks
+    "libvine_cam_provider.so": "/bin/hw/android.hardware.camera.provider@2.7-service-google",
+    "libvine_cam_hal.so": "/lib64/libgooglecamerahal.so",
+    "libvine_cam_halutils.so": "/lib64/libgooglecamerahalutils.so",
+    "libvine_cam_hwl.so": "/lib64/libgooglecamerahwl_impl.so",
+    "libvine_cam_profiler.so": "/lib64/lib_profiler.so",
+    "libvine_cam_meminfo.so": "/lib64/libmeminfo.so",
+    "libvine_cam_grallocusage.so": "/lib64/libgrallocusage.so",
+    "libvine_cam_thermal_2_0.so": "/lib64/android.hardware.thermal@2.0.so",
+    "libvine_cam_thermal_1_0.so": "/lib64/android.hardware.thermal@1.0.so",
+    # The HWL's camera configurations (JSON, under a library's name)
+    "libvine_cam_back.so": "/etc/config/emu_camera_back.json",
+    "libvine_cam_front.so": "/etc/config/emu_camera_front.json",
 }
+
+
+def single_front_camera(data):
+    """The front configuration is a logical camera over three physical
+    ones; a Pixel 5 has one front camera: the first physical one's"""
+    import json
+    import re
+    text = re.sub(r",(\s*[\]}])", r"\1", data.decode())  # jsoncpp takes trailing commas, json does not
+    cams = json.loads(text)
+    return json.dumps(cams[1] if isinstance(cams, list) else cams, indent=1).encode()
+
+
+# Applied after the hash check
+TRANSFORMS = {"libvine_cam_front.so": single_front_camera}
 SHA256 = {
     "arm64-v8a": {
         "libvine_sensors_multihal.so": "1bd233fe6eb76a161c5f3a08ead60f10053ff3ab79f9b26b2777ded7ddf6ad15",
@@ -76,6 +107,17 @@ SHA256 = {
         "libvine_ril_config_1_2.so": "5d79f1ca212d1d08ed1d5cf85cda00737a626f2cdd6c46ea99ab4972243e61bc",
         "libvine_ril_config_1_3.so": "3f3c0560432f1cdf04e8777d98d52b63791fd68c9512d93eee64bc98664c3608",
         "libvine_ril_deprecated.so": "43ed2ec1c9e5e916981e06920bb8ce143c0797268eaf49e0843f572a9b854b0a",
+        "libvine_cam_provider.so": "15633db83ca06df97bda3b554ca2d77f8745596cadcf821be55a40ed63feb5cb",
+        "libvine_cam_hal.so": "fda18c90518b917005029c301a8106aea534a4603ec9b57d2561b0b0a80ba7e7",
+        "libvine_cam_halutils.so": "d9d8ddd54247f8fba31c7137c3a7b3337aeec02d1fcabc88f17b886bede3a079",
+        "libvine_cam_hwl.so": "8f14f04bc40be9abce6d793c3dce463b9931d97805eafc345ef16be1d24714e6",
+        "libvine_cam_profiler.so": "065956067c5890f25466411a68b46b9028a1859d4c84de5d66657143be300362",
+        "libvine_cam_meminfo.so": "ef55d0fd7d578561b77af7875e97c80665e9a491c213525881fe69edc87dc5d5",
+        "libvine_cam_grallocusage.so": "2800b4228d5924d883c59feb261fc681c8cbd00c50896920707158f0ef151a78",
+        "libvine_cam_thermal_2_0.so": "76a3fe059b949e0c4350c63b728c781e217beb44270a5bb2760a086038ab4169",
+        "libvine_cam_thermal_1_0.so": "7875c2d6de96f2397b34c39cfb9edb5732006c4dc61397abba219c28025ed9c2",
+        "libvine_cam_back.so": "8f6d68c50674023d13a155aaa5cadcce59df2e689e65eb8d509862ce71cfa479",
+        "libvine_cam_front.so": "cafebf4cdc2188021e1b78c01ecba0d33088851d37ce53e80adcb200ce2ddff4",
     },
     "x86_64": {
         "libvine_sensors_multihal.so": "24a9e818868b839e4594f02713584445ade95f15f333ab1a426d8078fa03ebee",
@@ -97,6 +139,17 @@ SHA256 = {
         "libvine_ril_config_1_2.so": "ee9a1d29d85daca7d95805eb45ab4d7a8dbbeda5755687842c3b1f572461d3d1",
         "libvine_ril_config_1_3.so": "044c9b838c90dcc658fc75e057a903dbeb040e9fb5d05f4e34bec253c27fd7aa",
         "libvine_ril_deprecated.so": "c4a60a196a9f9883328facbffcf6f6186a2d722379cbf876bee3c00dbe270506",
+        "libvine_cam_provider.so": "8dda5b74f09e11bbc537dd8bf447bef075b319fba8b4e3c53921364a3aed9d61",
+        "libvine_cam_hal.so": "2f3fcfa9916385649a5198a84db074ebad28603b848b3c5359ca70d3ddf3807b",
+        "libvine_cam_halutils.so": "a8e1c7f2b62d3441e7f62a51e0590f12fb540093f1e79df3a3dbae39e5468219",
+        "libvine_cam_hwl.so": "33112ba066639428c94102d5662062328d54dca299bc411bf62d9a87fae76e51",
+        "libvine_cam_profiler.so": "7d1119205a045d82cc3ff1cd67e5a694c50b982445e2af7a463d692f250074eb",
+        "libvine_cam_meminfo.so": "8f72e20b8c3139a98ab2db9fad7ca0a9cbb9b607a69114c2bef33d16118e2873",
+        "libvine_cam_grallocusage.so": "1f1e216a1251651bff216a22da373a60a2fff7b212264ccc1cd6f51ac842d1cf",
+        "libvine_cam_thermal_2_0.so": "9e5487daabbfa8f505d68ef8eeea5e58d04225a6a7971487f736aa2028337f18",
+        "libvine_cam_thermal_1_0.so": "31f3d928ae1a89c5355340a6b13426a9db1ada82559e47c43fea60527b439b01",
+        "libvine_cam_back.so": "8f6d68c50674023d13a155aaa5cadcce59df2e689e65eb8d509862ce71cfa479",
+        "libvine_cam_front.so": "cafebf4cdc2188021e1b78c01ecba0d33088851d37ce53e80adcb200ce2ddff4",
     },
 }
 
@@ -180,6 +233,11 @@ def fetch(abi, out_dir, work):
         want = SHA256[abi][name]
         if digest != want:
             sys.exit(f"{abi}: {name}: sha256 {digest}, expected {want}")
+        if name in TRANSFORMS:
+            with open(tmp, "rb") as f:
+                data = TRANSFORMS[name](f.read())
+            with open(tmp, "wb") as f:
+                f.write(data)
         shutil.copyfile(tmp, os.path.join(out_dir, name))
         os.chmod(os.path.join(out_dir, name), 0o755)
         print(f"  {name}")

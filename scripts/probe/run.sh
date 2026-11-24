@@ -24,6 +24,7 @@ cat > "$w/AndroidManifest.xml" <<EOF
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <application android:label="probe"><activity android:name=".Main" android:exported="true" /></application>
 </manifest>
 EOF
@@ -44,7 +45,7 @@ data="files/instances/$id/rootless/data"
 "$adb" exec-in "run-as $host sh -c 'cat > $data/local/tmp/probe.apk'" < "$w/probe.apk"
 # pm install PATH: PackageManager's SELinux check refuses a file the app (its host uid) wrote; stdin is fine
 gx "f=/data/local/tmp/probe.apk; cat \$f | pm install -r -S \$(stat -c %s \$f) >/dev/null; rm \$f
-    for p in READ_PHONE_STATE ACCESS_FINE_LOCATION BLUETOOTH_CONNECT; do pm grant $pkg android.permission.\$p; done
+    for p in READ_PHONE_STATE ACCESS_FINE_LOCATION BLUETOOTH_CONNECT CAMERA; do pm grant $pkg android.permission.\$p; done
     rm -f /data/data/$pkg/files/report.txt; am start -W -n $pkg/.Main >/dev/null
     for i in \$(seq 1 30); do [ -s /data/data/$pkg/files/report.txt ] && break; sleep 1; done
     cat /data/data/$pkg/files/report.txt; pm uninstall $pkg >/dev/null" | grep -v '^exit='
