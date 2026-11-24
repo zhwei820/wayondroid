@@ -172,7 +172,8 @@ private fun StatusOverlay(visible: Boolean, name: String, status: VMStatus, erro
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.9f)),
+            // Opaque: the surface may still hold the last boot's frame
+            .background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {

@@ -272,6 +272,8 @@ bool Instance::start(std::string* error) {
     }
     error_.clear();
     booted_ = false;
+    // The last boot's screen: the app would show it until vine_wl makes a new one
+    unlink(layout_.vinefb.c_str());
     const std::string log_path = layout_.logs + "/prepare.log";
     const int log = open_log(log_path, true);
     prep_pid_ = fork();

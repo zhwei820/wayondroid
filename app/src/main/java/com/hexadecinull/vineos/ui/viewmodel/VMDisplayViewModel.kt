@@ -1,5 +1,6 @@
 package com.hexadecinull.vineos.ui.viewmodel
 
+import android.system.Os
 import android.view.KeyEvent
 import android.view.Surface
 import androidx.compose.runtime.getValue
@@ -56,6 +57,7 @@ class VMDisplayViewModel @Inject constructor(
 
     private var instance: VMInstance? = null
     private var displayHandle = 0L
+    private var displayIno: Long? = null
     private var surface: Surface? = null
     private val lock = Any()
     private var jobs = emptyList<Job>()
@@ -91,6 +93,9 @@ class VMDisplayViewModel @Inject constructor(
             val handle = synchronized(lock) { displayHandle }
             if (handle == 0L) {
                 if (isActive && VineRuntime.isLoaded) openDisplay(found)
+            } else if (vinefbIno(found) != displayIno) {
+                // Removed or replaced by a new start: its frames are an earlier boot's
+                closeDisplay()
             } else {
                 val info = VineRuntime.displayInfo(handle)
                 hasFrame = info.size > 4 && info[4] > 0
@@ -104,9 +109,14 @@ class VMDisplayViewModel @Inject constructor(
         }
     }
 
+    private fun vinefbIno(found: VMInstance): Long? =
+        runCatching { Os.stat(vmManager.vinefbPath(found)).st_ino }.getOrNull()
+
     private fun openDisplay(found: VMInstance) {
+        val ino = vinefbIno(found) ?: return
         val handle = VineRuntime.openDisplay(vmManager.vinefbPath(found))
         if (handle == 0L) return
+        displayIno = ino
         VineRuntime.setDisplayFrameRate(handle, found.refreshHz)
         synchronized(lock) {
             displayHandle = handle

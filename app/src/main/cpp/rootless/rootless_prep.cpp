@@ -471,8 +471,13 @@ std::string replace_cstrings(std::string so, const std::pair<const char*, const 
 // transport), the driver as the vendor's
 const std::pair<const char*, const char*> kVulkanStrings[] = {
     {"%s (%s)", "%.0s%s"},
-    {"gfxstream", "Qualcomm"},
+    // Compiled as an 8-byte load and a store of its last "m\0", so the new
+    // name ends within its first 8 bytes
+    {"gfxstream", "Adreno"},
     {"Mesa " "25.3.6 (git-06f9e28304)", ""},
+    {"Goldfish GFXStream", ""},
+    // The SONAME, which dlopen(RTLD_NOLOAD) finds the loaded driver by
+    {"libvulkan_gfxstream.so", "vulkan.adreno.so"},
 };
 
 // The emulator's sensor names and vendor, in the ranchu HAL's .rodata,
