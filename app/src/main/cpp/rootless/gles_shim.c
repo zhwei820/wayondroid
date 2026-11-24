@@ -8,9 +8,9 @@
  * Apps see an Adreno 620's strings instead of ANGLE's ("ANGLE (Qualcomm,
  * Vulkan ...)", "Google Inc. (Qualcomm)") and no GL_ANGLE_ / GL_CHROMIUM_
  * extensions; system processes keep ANGLE's, which its users (Skia in
- * SurfaceFlinger) may rely on. The version stays the one ANGLE
- * implements (3.1): apps choose shaders by it. Unverified on a device:
- * the driver build in the version string. */
+ * SurfaceFlinger) may rely on. The GLES version stays the one ANGLE
+ * implements for the context (apps choose shaders by it), in the form and
+ * driver build of the Pixel 5's TQ3A.230901.001.C2 libGLESv2_adreno.so. */
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -22,7 +22,11 @@
 #define EGL_DRIVER "/vendor/lib64/egl/libEGL_angle.so"
 #define VENDOR "Qualcomm"
 #define RENDERER "Adreno (TM) 620"
-#define VERSION_PREFIX "OpenGL ES 3.1 V@0502.0 (GIT@7d8a5d1cd0, I9a9f0b7e8b, 1683677478) (Date:05/09/23)"
+#define DRIVER_BUILD " V@0490.0 (GIT@4783c89, I46ff5fc46f, 1606807783) (Date:11/30/20)"
+static const char* const kVersions[] = {"OpenGL ES 3.0" DRIVER_BUILD, "OpenGL ES 3.1" DRIVER_BUILD,
+                                        "OpenGL ES 3.2" DRIVER_BUILD};
+static const char* const kGlslVersions[] = {"OpenGL ES GLSL ES 3.00", "OpenGL ES GLSL ES 3.10",
+                                            "OpenGL ES GLSL ES 3.20"};
 
 typedef const GLubyte* (*get_string_fn)(GLenum);
 typedef const GLubyte* (*get_stringi_fn)(GLenum, GLuint);
@@ -137,9 +141,18 @@ __attribute__((visibility("default"))) const GLubyte* glGetString(GLenum name)
     switch (name) {
     case GL_VENDOR: return (const GLubyte*)VENDOR;
     case GL_RENDERER: return (const GLubyte*)RENDERER;
-    case GL_VERSION:
-        /* GLES 1 contexts: "OpenGL ES-CM 1.1 ..." */
-        return strncmp((const char*)real, "OpenGL ES 3", 11) ? real : (const GLubyte*)VERSION_PREFIX;
+    case GL_VERSION: {
+        /* "OpenGL ES 3.N ..."; GLES 1 contexts: "OpenGL ES-CM 1.1 ..." */
+        const char* v = (const char*)real;
+        if (strncmp(v, "OpenGL ES 3.", 12) || v[12] < '0' || v[12] > '2') return real;
+        return (const GLubyte*)kVersions[v[12] - '0'];
+    }
+    case GL_SHADING_LANGUAGE_VERSION: {
+        /* "OpenGL ES GLSL ES 3.N0 (ANGLE ...)" */
+        const char* v = (const char*)real;
+        if (strncmp(v, "OpenGL ES GLSL ES 3.", 20) || v[20] < '0' || v[20] > '2') return real;
+        return (const GLubyte*)kGlslVersions[v[20] - '0'];
+    }
     case GL_EXTENSIONS: return filtered_extensions(real);
     default: return real;
     }

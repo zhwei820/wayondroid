@@ -121,7 +121,9 @@ struct sensor_info {
     int32_t max_delay;
     uint32_t flags;
 };
+#if defined(__LP64__)
 _Static_assert(sizeof(struct sensor_info) == 0x70, "SensorInfo is 0x70 bytes");
+#endif
 /* V2_1::Event */
 struct event {
     int64_t timestamp;
@@ -191,6 +193,9 @@ static void patch_table(void)
     static bool done;
     if (done) return;
     done = true;
+#if !defined(__LP64__)
+    return; /* the guest's HAL is 64-bit; the layout above is LP64's */
+#endif
     struct sensor_info* t = NULL;
     dl_iterate_phdr(find_table, &t);
     if (!t) return;

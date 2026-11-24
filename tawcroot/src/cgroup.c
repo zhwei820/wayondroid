@@ -562,6 +562,17 @@ long tawcroot_cgroup_write(int fd, const void *buf, size_t len)
     return e < 0 ? e : (long)len;
 }
 
+/* "uid_<N>/..." with N an app's uid (10000 and up, any user) */
+static int app_uid_path(const char *path)
+{
+    if (!tawc_starts_with(path, "uid_")) return 0;
+    long uid = 0;
+    const char *p = path + 4;
+    if (*p < '0' || *p > '9') return 0;
+    while (*p >= '0' && *p <= '9') uid = uid * 10 + (*p++ - '0');
+    return (*p == '/' || !*p) && uid % 100000 >= 10000;
+}
+
 /* /proc/self/cgroup, /proc/thread-self/cgroup, /proc/<pid>/cgroup. */
 long tawcroot_cgroup_proc_open(const char *path, int flags)
 {
@@ -591,9 +602,16 @@ long tawcroot_cgroup_proc_open(const char *path, int flags)
     char *text = scratch->buf[0];
     size_t n = 0;
     int i = find(r, pid);
+    const char *cg = i >= 0 && r->start[i] == start ? r->path[i] : "";
+    /* An app's process (Android puts it in uid_<uid>/pid_<pid>) also has
+     * the v1 hierarchies Android 13 mounts (cgroups.json: blkio, cpu,
+     * cpuset, memory, ids in mount order), as a foreground app's: nothing
+     * records which group the guest's v1 writes chose */
+    if (app_uid_path(cg))
+        (void)tawc_str_append(text, TAWCROOT_PATH_SCRATCH_SIZE, &n,
+                              "4:memory:/\n3:cpuset:/top-app\n2:cpu:/top-app\n1:blkio:/\n");
     (void)tawc_str_append(text, TAWCROOT_PATH_SCRATCH_SIZE, &n, "0::/");
-    if (i >= 0 && r->start[i] == start)
-        (void)tawc_str_append(text, TAWCROOT_PATH_SCRATCH_SIZE, &n, r->path[i]);
+    (void)tawc_str_append(text, TAWCROOT_PATH_SCRATCH_SIZE, &n, cg);
     (void)tawc_str_append(text, TAWCROOT_PATH_SCRATCH_SIZE, &n, "\n");
     reg_close(fd, r);
     return memfd_with(text, n, flags);

@@ -174,7 +174,9 @@ public class Main extends Activity {
 
     void sensors() {
         SensorManager sm = getSystemService(SensorManager.class);
-        for (Sensor s : sm.getSensorList(Sensor.TYPE_ALL)) put("sensor." + s.getType(), s.getName() + " | " + s.getVendor());
+        for (Sensor s : sm.getSensorList(Sensor.TYPE_ALL))
+            put("sensor." + s.getType() + (s.isWakeUpSensor() ? ".wakeup" : ""),
+                s.getName() + " | " + s.getVendor() + " | mode=" + s.getReportingMode());
     }
 
     void gl() {

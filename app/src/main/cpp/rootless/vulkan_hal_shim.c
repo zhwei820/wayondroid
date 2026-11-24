@@ -17,9 +17,10 @@
 #define DEVICE_ID 0x06020001u
 #define DRIVER_NAME "Qualcomm Technologies Inc. Adreno Vulkan Driver"
 /* Adreno's form, not Mesa's (gfxstream reports its Mesa release, which
- * ANGLE puts in GL_RENDERER). Unverified: the release Pixel 5's A13 ships */
-#define DRIVER_VERSION VK_MAKE_VERSION(512, 530, 0)
-#define DRIVER_INFO "Driver Build: 7d8a5d1cd0, I9a9f0b7e8b, 1683677478\nDate: 05/09/23\nCompiler Version: E031.41.03.36\nDriver Branch: \n"
+ * ANGLE puts in GL_RENDERER): the build of the Pixel 5's TQ3A.230901.001.C2
+ * vulkan.adreno.so (V@0490.0, its strings) */
+#define DRIVER_VERSION VK_MAKE_VERSION(512, 490, 0)
+#define DRIVER_INFO "Driver Build: 4783c89, I46ff5fc46f, 1606807783\nDate: 11/30/20\nCompiler Version: EV031.31.04.01\nDriver Branch: QPR2\n"
 
 /* hardware/hardware.h and hardware/hwvulkan.h, which the NDK lacks */
 struct hw_module_t;

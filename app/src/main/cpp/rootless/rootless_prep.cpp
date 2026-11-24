@@ -827,6 +827,24 @@ bool patch_health_hal(const std::string& R, std::string* error) {
 const char* const kAngleHidden[] = {"/vendor/lib64/egl/libEGL_mesa.so", "/vendor/lib64/egl/libGLESv1_CM_mesa.so",
                                     "/vendor/lib64/egl/libGLESv2_mesa.so"};
 
+// ANGLE caps GLES at 3.1 unless its exposeNonConformantExtensionsAndVersions
+// feature is on, which only an override turns on (a property or an
+// environment variable apps would see). In the image's ANGLE (arm64),
+// RendererVk::getMaxSupportedESVersion's load of that feature's flag
+// becomes `mov w8, #1`; the Vulkan limits it checks next still apply.
+// Found by its surrounding bytes, the load in the middle.
+const std::string kAngleEs32From("\x00\x00\x09\x8b\xab\xfc\x0a\x94\x88\xc2\x67\x39\xa0\x00\x00\x36\xa8\x00\x00\x35", 20);
+const std::string kAngleEs32To("\x00\x00\x09\x8b\xab\xfc\x0a\x94\x28\x00\x80\x52\xa0\x00\x00\x36\xa8\x00\x00\x35", 20);
+
+bool enable_angle_es32(const std::string& path, std::string* error) {
+    auto lib = read_file(path);
+    if (!lib) return true;
+    const size_t at = lib->find(kAngleEs32From);
+    if (at == std::string::npos || lib->find(kAngleEs32From, at + 1) != std::string::npos) return true;
+    lib->replace(at, kAngleEs32To.size(), kAngleEs32To);
+    return write_mode(path, *lib, 0644, error);
+}
+
 bool install_gles_shim(const std::string& R, const std::string& lib_dir, std::string* error) {
     // Beside the EGL library, which dlopen()s it from its own directory
     const std::string egl = R + "/vendor/lib64/egl", angle_gles = egl + "/libllvm-glnext.so";
@@ -838,9 +856,12 @@ bool install_gles_shim(const std::string& R, const std::string& lib_dir, std::st
     const auto gles = read_file(egl + "/libGLESv2_angle.so");
     auto egl_lib = read_file(egl + "/libEGL_angle.so");
     if (!shim || !gles || !egl_lib) return true;
-    // The image's library, unless it is already the shim
-    if (*gles != *shim && !write_mode(angle_gles, *gles, 0644, error)) return false;
+    // The image's library, unless it is already a shim: any build of it, an
+    // earlier one included, names the library it loads (gles_shim.c)
+    const bool is_shim = gles->find("/vendor/lib64/egl/libllvm-glnext.so") != std::string::npos;
+    if (!is_shim && !write_mode(angle_gles, *gles, 0644, error)) return false;
     if (!is_regular_file(angle_gles)) return true;
+    if (!enable_angle_es32(angle_gles, error)) return false;
     // DT_NEEDED, and the name it dlopen()s at run time with ".so" appended
     const std::pair<std::string, std::string> names[] = {
         {std::string("libGLESv2_angle.so\0", 19), std::string("libllvm-glnext.so\0\0", 19)},
@@ -1773,8 +1794,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
             if (!mkdirs_or_fail(S + d, error)) return false;
         for (const char* f : {"/wpa_wlan0", "/chre", "/ims_qmid", "/ims_datad", "/pps", "/msm_irqbalance", "/ssgtzd",
                               "/qwes_ipc"})
-            if (mknod((S + f).c_str(), S_IFSOCK | 0660, 0) != 0 && errno != EEXIST)
-                return fail(error, "could not create " + S + f + ": " + strerror(errno));
+            mknod((S + f).c_str(), S_IFSOCK | 0660, 0);  // best effort: only their names show
     }
     // vine_kumquat's sockets where apps' GPU drivers find them (/run, the
     // engine's, is hidden from apps): gfxstream-vk's default path
