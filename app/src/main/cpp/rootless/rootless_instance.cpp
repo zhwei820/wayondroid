@@ -318,7 +318,10 @@ bool Instance::launch_services(std::string* error) {
     }
     // Optional: without it the guest's RIL finds no modem and telephony no SIM
     if (is_regular_file(lib + "libvine_modem.so")) {
-        std::vector<std::string> argv = {lib + "libvine_modem.so", "--socket", "run/vine-modem", "--seed", cfg_.id};
+        // The IMEI follows the device seed, new on a reset
+        std::string seed = read_file(W + "/device.seed").value_or("");
+        while (!seed.empty() && seed.back() == '\n') seed.pop_back();
+        std::vector<std::string> argv = {lib + "libvine_modem.so", "--socket", "run/vine-modem", "--seed", seed.empty() ? cfg_.id : seed};
         for (const auto& [flag, value] : {std::pair<const char*, const std::string&>{"--sim-operator", cfg_.sim_operator},
                                           {"--sim-name", cfg_.sim_name},
                                           {"--net-operator", cfg_.net_operator},

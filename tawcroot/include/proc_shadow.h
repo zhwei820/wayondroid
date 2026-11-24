@@ -46,7 +46,8 @@ struct statx;
 #define TAWCROOT_PROC_SHADOW_SELINUX_ENFORCE 12  /* /sys/fs/selinux/enforce */
 #define TAWCROOT_PROC_SHADOW_CPUINFO    13  /* /proc/cpuinfo */
 #define TAWCROOT_PROC_SHADOW_CMDLINE    14  /* /proc/cmdline */
-#define TAWCROOT_PROC_SHADOW_KIND_MAX   14
+#define TAWCROOT_PROC_SHADOW_BOOT_ID    15  /* /proc/sys/kernel/random/boot_id */
+#define TAWCROOT_PROC_SHADOW_KIND_MAX   15
 int tawcroot_proc_shadow_classify(const char *path);
 
 /* A property area file an app's SELinux domain could not map: EACCES */

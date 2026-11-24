@@ -109,7 +109,10 @@ struct ne_ifreq {
 };
 _Static_assert(sizeof(struct ne_ifreq) == 40, "struct ifreq is 40 bytes");
 
-static const uint8_t eth_mac[6] = { 0xa6, 0x3c, 0x7e, 0x91, 0x5d, 0x28 };
+/* Replaced by <store>/mac at setup (load_mac): the engine picks one per
+ * device so instances don't share it */
+static uint8_t eth_mac[6] = { 0xa6, 0x3c, 0x7e, 0x91, 0x5d, 0x28 };
+static char eth_address[18] = "a6:3c:7e:91:5d:28";
 
 static int enabled(void)
 {
@@ -150,6 +153,47 @@ static long store_file(char *out, const char *name)
 	    tawc_str_append(out, TAWCROOT_PATH_SCRATCH_SIZE, &n, name))
 		return TAWC_ENAMETOOLONG;
 	return 0;
+}
+
+static int hex_digit(char c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+/* "aa:bb:cc:dd:ee:ff" into out, a unicast address only; 1 if it is one. */
+int tawcroot_netemu_parse_mac(const char *text, long n, uint8_t out[6])
+{
+	uint8_t mac[6];
+	if (n < 17 || (n > 17 && text[17] != '\n')) return 0;
+	for (int i = 0; i < 6; i++) {
+		int hi = hex_digit(text[3 * i]), lo = hex_digit(text[3 * i + 1]);
+		if (hi < 0 || lo < 0 || (i < 5 && text[3 * i + 2] != ':')) return 0;
+		mac[i] = (uint8_t)(hi << 4 | lo);
+	}
+	if (mac[0] & 1) return 0;
+	memcpy(out, mac, 6);
+	return 1;
+}
+
+static void load_mac(void)
+{
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	char *path = scratch->buf[0];
+	if (store_file(path, "/mac") < 0) return;
+	long fd = tawc_openat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
+	if (fd < 0) return;
+	char text[32];
+	long n = tawc_read((int)fd, text, sizeof text);
+	tawc_close((int)fd);
+	if (n <= 0 || !tawcroot_netemu_parse_mac(text, n, eth_mac)) return;
+	static const char digits[] = "0123456789abcdef";
+	for (int i = 0; i < 6; i++) {
+		eth_address[3 * i] = digits[eth_mac[i] >> 4];
+		eth_address[3 * i + 1] = digits[eth_mac[i] & 15];
+	}
 }
 
 static long state_open(struct ne_map *m, int reset)
@@ -1159,7 +1203,7 @@ static const char *const sys_lo[] = {
 	"uevent", "INTERFACE=lo\nIFINDEX=1", 0
 };
 static const char *const sys_eth[] = {
-	"ifindex", "2", "iflink", "2", "address", "a6:3c:7e:91:5d:28",
+	"ifindex", "2", "iflink", "2", "address", eth_address,
 	"broadcast", "ff:ff:ff:ff:ff:ff", "mtu", "1500", "flags", "0x1003",
 	"operstate", "up", "carrier", "1", "type", "1", "addr_len", "6",
 	"tx_queue_len", "1000", "dev_id", "0x0", "dev_port", "0", "addr_assign_type", "3",
@@ -1215,6 +1259,7 @@ long tawcroot_netemu_setup(void)
 {
 	struct tawc_namespace *ns = &tawcroot_namespace;
 	if (!(ns->session & TAWC_NS_INIT_SESSION)) return TAWC_EINVAL;
+	load_mac();
 	struct ne_map m;
 	long e = state_open(&m, 1);
 	if (e < 0) return e;

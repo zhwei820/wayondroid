@@ -37,6 +37,31 @@ std::string image_stamp(const Layout& l) {
     return s;
 }
 
+// n random bytes as lowercase hex, "" if /dev/urandom fails
+std::string random_hex(size_t n) {
+    std::string bytes(n, '\0');
+    FILE* f = fopen("/dev/urandom", "re");
+    const bool ok = f && fread(bytes.data(), 1, n, f) == n;
+    if (f) fclose(f);
+    if (!ok) return "";
+    static const char digits[] = "0123456789abcdef";
+    std::string out;
+    for (unsigned char c : bytes) {
+        out += digits[c >> 4];
+        out += digits[c & 15];
+    }
+    return out;
+}
+
+// A random UUID in boot_id's form, newline-terminated
+std::string random_boot_id() {
+    std::string h = random_hex(16);
+    if (h.empty()) return "";
+    h[12] = '4';
+    h[16] = "89ab"[h[16] % 4];
+    return h.substr(0, 8) + "-" + h.substr(8, 4) + "-" + h.substr(12, 4) + "-" + h.substr(16, 4) + "-" + h.substr(20) + "\n";
+}
+
 bool remove_if_exists(const std::string& path, std::string* error) {
     struct stat st{};
     if (lstat(path.c_str(), &st) != 0) return true;
@@ -441,6 +466,15 @@ std::string replace_cstrings(std::string so, const std::pair<const char*, const 
     return so;
 }
 
+// gfxstream's Vulkan device and driver names, which ANGLE puts in
+// GL_RENDERER: the device as the host GPU's own name ("%.0s" drops the
+// transport), the driver as the vendor's
+const std::pair<const char*, const char*> kVulkanStrings[] = {
+    {"%s (%s)", "%.0s%s"},
+    {"gfxstream", "Qualcomm"},
+    {"Mesa " "25.3.6 (git-06f9e28304)", ""},
+};
+
 // The emulator's sensor names and vendor, in the ranchu HAL's .rodata,
 // as the Pixel 5's parts (a CPU-Z listing; unverified on a device). Each
 // is a whole NUL-terminated string, the new one no longer: apps list the
@@ -650,12 +684,13 @@ bool remove_foreign_apps(const std::string& R, std::string* error) {
 // Files and directories that name Waydroid, LineageOS, the emulator or
 // the engine: tawcroot's <store>/app-hidden (tawcroot/include/app_hidden.h),
 // which apps see as absent. Kept visible: what app processes load or
-// read (framework jars and resources, installed apps and overlays, APEXes,
-// libraries but those only services load).
+// read (framework jars and resources, installed apps and overlays, APEXes);
+// the marked libraries only services load.
 bool marked_name(const std::string& name) {
     std::string n = name;
     for (char& c : n) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-    for (const char* m : {"waydroid", "lineage", "vine", "goldfish", "ranchu", "cuttlefish", "gfxstream", "anbox", "qemu"}) {
+    for (const char* m : {"waydroid", "lineage", "vine", "goldfish", "ranchu", "cuttlefish", "gfxstream", "anbox", "qemu",
+                          "virtio", "reference-ril"}) {
         if (n.find(m) != std::string::npos) return true;
     }
     return false;
@@ -664,8 +699,6 @@ bool marked_name(const std::string& name) {
 void collect_hidden(const std::string& R, const std::string& dir, int depth, std::vector<std::string>* out) {
     DIR* d = opendir((R + dir).c_str());
     if (!d) return;
-    const bool libs = dir.size() >= 4 && (dir.compare(dir.size() - 4, 4, "/lib") == 0 ||
-                                          (dir.size() >= 6 && dir.compare(dir.size() - 6, 6, "/lib64") == 0));
     while (dirent* e = readdir(d)) {
         const std::string name = e->d_name;
         if (name == "." || name == "..") continue;
@@ -676,7 +709,7 @@ void collect_hidden(const std::string& R, const std::string& dir, int depth, std
             if (name == "app" || name == "priv-app" || name == "overlay" || name == "framework" || name == "apex") continue;
             if (marked_name(name)) out->push_back(path);
             else if (depth < 6) collect_hidden(R, path, depth + 1, out);
-        } else if (libs ? name.rfind("libvine_", 0) == 0 || name.rfind("libcuttlefish_", 0) == 0 : marked_name(name)) {
+        } else if (marked_name(name)) {
             out->push_back(path);
         }
     }
@@ -687,7 +720,7 @@ std::string app_hidden_list(const std::string& R) {
     std::vector<std::string> paths;
     collect_hidden(R, "/system", 0, &paths);
     collect_hidden(R, "/vendor", 0, &paths);
-    std::string out;
+    std::string out = "/.tawcroot-tcp-v1\n";
     for (const std::string& p : paths) {
         out += p + "\n";
         // $R/product and $R/system_ext are symlinks into system
@@ -941,11 +974,45 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
     return out;
 }
 
-std::string guest_cmdline(const DeviceIdentity& id) {
+std::string guest_cmdline(const DeviceIdentity& id, const std::string& serial) {
     std::string out;
     if (!id.hardware.empty()) out += "androidboot.hardware=" + id.hardware + " ";
+    if (!serial.empty()) out += "androidboot.serialno=" + serial + " ";
     return out + "androidboot.verifiedbootstate=green androidboot.flash.locked=1 "
                  "androidboot.vbmeta.device_state=locked androidboot.veritymode=enforcing\n";
+}
+
+DeviceIds device_ids(const std::string& seed) {
+    uint64_t s = 0xcbf29ce484222325ull;
+    for (unsigned char c : seed) s = (s ^ c) * 0x100000001b3ull;
+    auto next = [&s] {  // splitmix64
+        uint64_t z = (s += 0x9e3779b97f4a7c15ull);
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+        return z ^ (z >> 31);
+    };
+    DeviceIds ids;
+    // Pixels' form: 0, a year letter, 2 digits, the factory's 1FDD400, a
+    // digit, 2 characters
+    static const char alnum[] = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    ids.serial = std::string("0") + "9AB"[next() % 3] + char('0' + next() % 10) + char('0' + next() % 10) + "1FDD400" +
+                 char('0' + next() % 10) + alnum[next() % 34] + alnum[next() % 34];
+    uint64_t m = next();
+    char mac[18];
+    snprintf(mac, sizeof mac, "%02x:%02x:%02x:%02x:%02x:%02x", (unsigned)((m & 0xfc) | 0x02), (unsigned)(m >> 8 & 0xff),
+             (unsigned)(m >> 16 & 0xff), (unsigned)(m >> 24 & 0xff), (unsigned)(m >> 32 & 0xff), (unsigned)(m >> 40 & 0xff));
+    ids.mac = mac;
+    return ids;
+}
+
+std::string device_seed(const Layout& l) {
+    const std::string path = l.work + "/device.seed";
+    std::string seed = read_file(path).value_or("");
+    while (!seed.empty() && seed.back() == '\n') seed.pop_back();
+    if (seed.size() == 32 && seed.find_first_not_of("0123456789abcdef") == std::string::npos) return seed;
+    seed = random_hex(16);
+    if (seed.empty() || !write_file_atomic(path, seed + "\n")) return "";
+    return seed;
 }
 
 std::vector<std::pair<std::string, std::string>> parse_environ_rc(const std::string& text) {
@@ -972,6 +1039,7 @@ bool extract_rootfs(const Layout& l, std::string* error) {
     if (!is_regular_file(l.instance + "/system.img")) return fail(error, "this instance has no system.img");
 
     unlink(stamp_path.c_str());
+    unlink((l.work + "/device.seed").c_str());
     if (!remove_if_exists(l.rootfs, error) || !remove_if_exists(l.store, error) || !remove_if_exists(l.data, error)) return false;
     if (!mkdirs_or_fail(l.rootfs, error) || !mkdirs_or_fail(l.store, error)) return false;
     const std::string owners = l.store + "/owners";
@@ -1070,9 +1138,18 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
             if (!write_mode(R + files[0].first, edited + add.substr(1) + "\n", 0644, error)) return false;
         }
     }
-    // tawcroot serves it as /proc/cmdline (ro.hardware, verified boot); apps
-    // are denied it, as on a phone
-    if (!write_mode(l.store + "/cmdline", guest_cmdline(id), 0644, error)) return false;
+    const std::string seed = device_seed(l);
+    if (seed.empty()) return fail(error, "could not write " + l.work + "/device.seed");
+    const DeviceIds ids = device_ids(seed);
+    // tawcroot serves it as /proc/cmdline (ro.hardware, serial, verified
+    // boot); apps are denied it, as on a phone
+    if (!write_mode(l.store + "/cmdline", guest_cmdline(id, ids.serial), 0644, error)) return false;
+    // tawcroot's wlan0 address, and the guest's boot_id: new each boot as on
+    // a phone, not the host's that every instance would share
+    const std::string boot_id = random_boot_id();
+    if (boot_id.empty()) return fail(error, "/dev/urandom unreadable");
+    if (!write_mode(l.store + "/mac", ids.mac + "\n", 0644, error) || !write_mode(l.store + "/boot_id", boot_id, 0644, error))
+        return false;
     if (!o.host_has_32bit) {
         for (const char* f : {"/system/build.prop", "/vendor/build.prop", "/vendor/odm/etc/build.prop"}) {
             const auto text = read_file(R + f);
@@ -1148,7 +1225,8 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         unlink((hw + "/vulkan.adreno.so").c_str());
         unlink((hw + "/gralloc.redfin.so").c_str());
     }
-    if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.adreno.so", 0644, error) ||
+    const auto vk = o.gpu ? read_file(o.lib_dir + "/libvine_vk_gfxstream.so") : std::nullopt;
+    if (o.gpu && (!vk || !write_mode(hw + "/vulkan.adreno.so", replace_cstrings(*vk, kVulkanStrings), 0644, error) ||
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.redfin.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;

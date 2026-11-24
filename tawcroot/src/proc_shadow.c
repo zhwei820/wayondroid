@@ -32,6 +32,7 @@ int tawcroot_could_be_proc_relative(const char *p)
 	static const char *const leaves[] = {
 		"maps", "stat", "version", "uptime", "loadavg", "devices",
 		"tcp", "tcp6", "overflowuid", "overflowgid", "cpuinfo", "cmdline",
+		"boot_id",
 		"exe", "cwd", "root",
 	};
 	const char *leaf = p;
@@ -401,6 +402,8 @@ int tawcroot_proc_shadow_classify(const char *path)
 		return TAWCROOT_PROC_SHADOW_CPUINFO;
 	if (tawc_streq(path, "/proc/cmdline"))
 		return TAWCROOT_PROC_SHADOW_CMDLINE;
+	if (tawc_streq(path, "/proc/sys/kernel/random/boot_id"))
+		return TAWCROOT_PROC_SHADOW_BOOT_ID;
 	/* Last: the only kind whose match can cost a /proc/<n>/status
 	 * read (numeric-pid ownership resolution). */
 	if (is_proc_self_maps(path))
@@ -869,6 +872,30 @@ static long open_proc_cmdline_shadow(void)
 	return memfd_from_bytes("tawcroot-cmdline", text, (size_t)n);
 }
 
+/* /proc/sys/kernel/random/boot_id: the engine's <store>/boot_id, new each
+ * boot, so guests on one phone don't share the host's; the host's without
+ * one. */
+static long open_proc_boot_id_shadow(void)
+{
+	char text[64];
+	long n = 0;
+	if (tawcroot_store_host_path_len) {
+		long dir = tawc_openat(AT_FDCWD, tawcroot_store_host_path,
+				       O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+		if (dir >= 0) {
+			long fd = tawc_openat((int)dir, "boot_id", O_RDONLY | O_CLOEXEC, 0);
+			tawc_close((int)dir);
+			if (fd >= 0) {
+				n = tawc_read((int)fd, text, sizeof text);
+				tawc_close((int)fd);
+			}
+		}
+	}
+	if (n == 37 && text[36] == '\n')
+		return memfd_from_bytes("tawcroot-boot-id", text, (size_t)n);
+	return tawc_openat(AT_FDCWD, "/proc/sys/kernel/random/boot_id", O_RDONLY | O_CLOEXEC, 0);
+}
+
 /* selinuxfs status page (struct selinux_status_t): version 1, sequence
  * 0 (no update in progress), enforcing for apps and permissive otherwise
  * (see guest_is_app), policy load 0, deny_unknown 0. A whole page,
@@ -916,6 +943,8 @@ long tawcroot_proc_shadow_open(int kind)
 		return open_proc_cpuinfo_shadow();
 	case TAWCROOT_PROC_SHADOW_CMDLINE:
 		return open_proc_cmdline_shadow();
+	case TAWCROOT_PROC_SHADOW_BOOT_ID:
+		return open_proc_boot_id_shadow();
 	default:
 		return TAWC_EINVAL;
 	}

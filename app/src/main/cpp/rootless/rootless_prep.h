@@ -71,8 +71,21 @@ DeviceIdentity guest_identity();
 std::string props_device(const std::string& build_prop, const DeviceIdentity& id);
 
 // /proc/cmdline as the guest's init reads it (through tawcroot, from
-// <store>/cmdline): ro.hardware and a locked, verified boot
-std::string guest_cmdline(const DeviceIdentity& id);
+// <store>/cmdline): ro.hardware, ro.serialno (when given) and a locked,
+// verified boot
+std::string guest_cmdline(const DeviceIdentity& id, const std::string& serial = "");
+
+// The identifiers that tell one phone from another, made from
+// <work>/device.seed: a reset (a fresh extraction) draws a new seed, so
+// the guest is a new device to apps; restarts keep it.
+struct DeviceIds {
+    std::string serial; // ro.serialno, a Pixel's 14 characters
+    std::string mac;    // the fake wlan0's, aa:bb:cc:dd:ee:ff, locally administered as Android's randomized ones are
+};
+DeviceIds device_ids(const std::string& seed);
+
+// <work>/device.seed, drawn if missing; "" if it can't be written
+std::string device_seed(const Layout& l);
 
 // `export NAME VALUE` lines of an init.environ.rc
 std::vector<std::pair<std::string, std::string>> parse_environ_rc(const std::string& text);

@@ -7,6 +7,7 @@ fit in sun_path, like an app data dir.
 Usage: test_rootless.py VINE_HELPER"""
 import os
 import queue
+import re
 import shutil
 import socket
 import stat
@@ -358,7 +359,8 @@ def main():
     check(not os.path.exists(os.path.join(R, "system/product/app/Etar")), "Lineage apps removed")
     hidden = read(os.path.join(W, "tawcroot/app-hidden")).split("\n")
     check("/system/etc/init/init.waydroid.rc" in hidden and "/system/product/etc/vine" in hidden and
-          "/product/etc/vine" in hidden and "/vendor/lib64/hw/hwcomposer.redfin.so" not in hidden and
+          "/product/etc/vine" in hidden and "/.tawcroot-tcp-v1" in hidden and
+          "/vendor/lib64/hw/hwcomposer.redfin.so" not in hidden and
           not any("Jelly" in p for p in hidden), "Waydroid's files hidden from apps: " + str(hidden))
     ctx = read(os.path.join(R, "vendor/etc/selinux/vendor_property_contexts"))
     check(ctx.startswith("ro.hardware. ") and ctx.count("\nwaydroid. ") == 1 and "\nro.lineage. " in ctx and
@@ -412,8 +414,17 @@ def main():
           "<fqname>IRadioConfig/default</fqname>" in radio_vintf, "RIL VINTF")
     check("android.hardware.telephony" in read(os.path.join(R, "vendor/etc/permissions/android.hardware.telephony.gsm.xml")), "telephony feature")
     check("ro.com.android.mobiledata=false\n" in read(os.path.join(R, "vendor/waydroid.prop")), "mobile data off")
+    seed = read(os.path.join(W, "device.seed")).strip()
+    check(re.fullmatch(r"[0-9a-f]{32}", seed) is not None, "device seed: " + seed)
+    check(re.fullmatch(r"androidboot\.hardware=redfin androidboot\.serialno=0[9AB]\d\d1FDD400\d[0-9A-Z]{2} .*\n",
+                       read(os.path.join(W, "tawcroot/cmdline"))) is not None, "serial on the cmdline: " + read(os.path.join(W, "tawcroot/cmdline")))
+    mac = read(os.path.join(W, "tawcroot/mac"))
+    check(re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}\n", mac) is not None and int(mac[:2], 16) & 3 == 2, "wlan0 MAC: " + mac)
+    boot_id = read(os.path.join(W, "tawcroot/boot_id"))
+    check(re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n", boot_id) is not None and
+          boot_id != read("/proc/sys/kernel/random/boot_id"), "guest boot_id: " + boot_id)
     check(read(os.path.join(W, "modem.args")).split("\n")[:-1] ==
-          ["--socket", "run/vine-modem", "--seed", name, "--sim-operator", "46000", "--sim-name", "中国移动",
+          ["--socket", "run/vine-modem", "--seed", seed, "--sim-operator", "46000", "--sim-name", "中国移动",
            "--net-operator", "46000", "--net-name", "CHINA MOBILE"], "vine_modem gets the phone's SIM")
     check("<op n=\"24\"" in read(os.path.join(W, "data/system/appops.xml")), "appops seeded")
     for d in ("data/misc/ethernet", "data/misc/apexdata/com.android.tethering/misc/ethernet"):
@@ -494,7 +505,23 @@ def main():
     check(os.path.exists(marker), "no second extraction")
     check(read(os.path.join(R, "system/etc/init/vold.rc")).count("libvine_vold_shim") == 1, "vold.rc patched once")
     check(read(os.path.join(R, "system/build.prop")).count("\nro.product.board=") == 1, "Pixel 5 props added once")
+    check(read(os.path.join(W, "device.seed")).strip() == seed and read(os.path.join(W, "tawcroot/mac")) == mac,
+          "restart keeps the device")
+    check(read(os.path.join(W, "tawcroot/boot_id")) != boot_id, "restart draws a new boot_id")
     os.unlink(os.path.join(W, "init-crash"))
+
+    print("[reset makes a new device]")
+    cmdline = read(os.path.join(W, "tawcroot/cmdline"))
+    os.unlink(os.path.join(W, "rootfs.stamp"))
+    ok, text = h.call("start", name, inst)
+    check(ok and h.wait_state(name, "running") is not None, "reset boots: " + text)
+    seed2 = read(os.path.join(W, "device.seed")).strip()
+    check(seed2 != seed and re.fullmatch(r"[0-9a-f]{32}", seed2) is not None, "new seed: " + seed2)
+    check(read(os.path.join(W, "tawcroot/mac")) != mac and read(os.path.join(W, "tawcroot/cmdline")) != cmdline,
+          "new MAC and serial")
+    check(read(os.path.join(W, "modem.args")).split("\n")[3] == seed2, "IMEI follows the new seed")
+    ok, _ = h.call("stop", name)
+    check(ok, "stop after reset")
 
     print("[64-bit audio HAL kept]")
     name64 = "fedcba98-4567-89ef-0123-456789abcdef"
@@ -509,7 +536,8 @@ def main():
     check(not os.path.exists(os.path.join(R64, "vendor/etc/init/android.hardware.sensors@2.1-service-multihal.rc")), "no sensors HAL without the image's libraries")
     check(not os.path.exists(os.path.join(R64, "vendor/etc/init/rild.rc")) and
           "mobiledata" not in read(os.path.join(R64, "vendor/waydroid.prop")), "no RIL without the image's radio@1.0")
-    check(read(os.path.join(inst64, "rootless/modem.args")).split("\n")[:-1] == ["--socket", "run/vine-modem", "--seed", name64],
+    check(read(os.path.join(inst64, "rootless/modem.args")).split("\n")[:-1] == ["--socket", "run/vine-modem", "--seed",
+                                                                                 read(os.path.join(inst64, "rootless/device.seed")).strip()],
           "no SIM passed: vine_modem without one")
     ok, _ = h.call("stop", name64)
     check(ok, "stop the 64-bit instance")

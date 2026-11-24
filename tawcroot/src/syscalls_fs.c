@@ -991,6 +991,7 @@ static long memfd_link_target(const char *link, long n, char *out, size_t cap)
 		{ "cpuinfo", 0, "/proc/cpuinfo" }, { "version", 0, "/proc/version" },
 		{ "stat", 0, "/proc/stat" }, { "uptime", 0, "/proc/uptime" },
 		{ "loadavg", 0, "/proc/loadavg" }, { "cmdline", 0, "/proc/cmdline" },
+		{ "boot-id", 0, "/proc/sys/kernel/random/boot_id" },
 		{ "pci-devices", 0, "/proc/bus/pci/devices" },
 		{ "selinux-status", 0, "/sys/fs/selinux/status" },
 		{ "selinux-enforce", 0, "/sys/fs/selinux/enforce" },

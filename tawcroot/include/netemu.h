@@ -1,5 +1,6 @@
 /* `--fake-net`: an emulated loopback + one link for init sessions (netemu.c). */
 #pragma once
+#include <stdint.h>
 #include <ucontext.h>
 #include "dispatch.h"
 
@@ -8,6 +9,10 @@
  * so). Its sysfs entries in netemu.c spell the name out too. */
 #define TAWCROOT_NETEMU_ETH_INDEX 2
 #define TAWCROOT_NETEMU_LINK "wlan0"
+
+/* "aa:bb:cc:dd:ee:ff" (newline optional) into out when it is a unicast
+ * address: 1, else 0 and out untouched. */
+int tawcroot_netemu_parse_mac(const char *text, long n, uint8_t out[6]);
 
 /* After --init: reset the link table, populate the fake /sys/class/net
  * and /proc/sys/net and bind them, and stack the traps netemu needs. */

@@ -200,7 +200,8 @@ public class Main extends Activity {
                 "/system/bin/vine_lmkd", "/vendor/lib64/libcuttlefish_fs.so", "/system/addon.d/50-lineage.sh"}) {
             put("exists." + f, new File(f).exists());
         }
-        put("proc.self.maps.marks", grep(read("/proc/self/maps", 5000), MARK.pattern()));
+        // AOSP's plat_property_contexts gives every device the qemu_* property areas
+        put("proc.self.maps.marks", grep(read("/proc/self/maps", 5000).replaceAll("(?m)^.*/dev/__properties__/u:object_r:qemu_[a-z_]*prop:s0$", ""), MARK.pattern()));
     }
 
     static String grep(String text, String re) {
