@@ -11,7 +11,7 @@ import java.util.function.Supplier;
 
 /**
  * Added to the guest's service-wifi.jar by dev.vine.pmpatch.Main, which
- * points four calls of WifiServiceImpl and ScanRequestProxy's scan
+ * points six calls of WifiServiceImpl and ScanRequestProxy's scan
  * failure broadcasts here. The guest has no Wi-Fi radio;
  * it is online through tawcroot's wlan0, which the framework already counts
  * as a Wi-Fi network. Apps asking WifiManager see that network: Wi-Fi on,
@@ -49,6 +49,35 @@ public final class VineWifi {
             return Boolean.TRUE;
         }
         return result;
+    }
+
+    /**
+     * WifiServiceImpl.getCurrentNetwork's ClientMode.syncGetCurrentNetwork():
+     * without a radio there is none, and SystemUI's Internet panel shows no
+     * connection without its NetworkInfo
+     */
+    public static android.net.Network syncGetCurrentNetwork(ClientMode mode) {
+        android.net.Network network = mode.syncGetCurrentNetwork();
+        return network != null ? network : VineWifiInfo.network();
+    }
+
+    /**
+     * WifiServiceImpl.getPrivilegedConfiguredNetworks' WifiThreadRunner.call:
+     * the saved network VineWifiInfo's connection is to (Settings and
+     * SystemUI only show a connection to a saved network)
+     */
+    @SuppressWarnings("unchecked")
+    public static Object callConfigs(WifiThreadRunner runner, Supplier<Object> supplier, Object onTimeout) {
+        Object result = runner.call(supplier, onTimeout);
+        android.net.wifi.WifiConfiguration config = VineWifiInfo.config();
+        if (!(result instanceof List) || config == null) return result;
+        for (Object c : (List<Object>) result) {
+            if (c instanceof android.net.wifi.WifiConfiguration && ((android.net.wifi.WifiConfiguration) c).networkId == 0)
+                return result;
+        }
+        List<Object> out = new java.util.ArrayList<>((List<Object>) result);
+        out.add(config);
+        return out;
     }
 
     /**

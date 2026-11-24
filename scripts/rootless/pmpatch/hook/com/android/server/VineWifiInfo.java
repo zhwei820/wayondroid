@@ -154,6 +154,42 @@ public final class VineWifiInfo {
         return s;
     }
 
+    /**
+     * The saved network fake()'s connection is to: same network id, SSID
+     * and security (PSK, as scan() reports it), as Settings and SystemUI
+     * match a connection to a saved network; null without wlan0
+     */
+    public static android.net.wifi.WifiConfiguration config() {
+        try {
+            int h = seed(wlan0());
+            if (h == 0) return null;
+            android.net.wifi.WifiConfiguration c = new android.net.wifi.WifiConfiguration();
+            c.networkId = 0;
+            c.SSID = "\"" + ssid(h) + "\"";
+            c.setSecurityParams(android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK);
+            c.status = android.net.wifi.WifiConfiguration.Status.CURRENT;
+            return c;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** The network wlan0 gives: the default one, which has the Wi-Fi transport; or null */
+    public static android.net.Network network() {
+        Context context = systemContext();
+        if (context == null || wlan0() == null) return null;
+        try {
+            android.net.ConnectivityManager cm = context.getSystemService(android.net.ConnectivityManager.class);
+            for (android.net.Network n : cm.getAllNetworks()) {
+                android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+                if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) return n;
+            }
+        } catch (Exception e) {
+            // none
+        }
+        return null;
+    }
+
     /** Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT (hidden), as WifiService sends these */
     private static final int FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT = 0x04000000;
 

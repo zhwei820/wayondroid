@@ -211,10 +211,17 @@ public final class Main {
         return renamed || redirected;
     }
 
-    /** In WifiServiceImpl's getWifiEnabledState, getConnectionInfo, getScanResults and startScan */
+    /**
+     * In WifiServiceImpl's getWifiEnabledState, getConnectionInfo, getScanResults, startScan,
+     * getCurrentNetwork and getPrivilegedConfiguredNetworks
+     */
     static boolean redirectWifi(Method m, MutableMethodImplementation impl) {
         if (m.getName().equals("getWifiEnabledState") && m.getParameterTypes().isEmpty())
             return redirect(impl, PATCHES[2], "Lcom/android/server/wifi/ActiveModeWarden;", "getWifiState");
+        if (m.getName().equals("getCurrentNetwork"))
+            return redirect(impl, PATCHES[2], "Lcom/android/server/wifi/ClientMode;", "syncGetCurrentNetwork");
+        if (m.getName().equals("getPrivilegedConfiguredNetworks"))
+            return redirect(impl, PATCHES[2], "Lcom/android/server/wifi/WifiThreadRunner;", "call", "callConfigs");
         if (m.getName().equals("getConnectionInfo") || m.getName().equals("getScanResults")
                 || m.getName().equals("startScan"))
             return redirect(impl, PATCHES[2], "Lcom/android/server/wifi/WifiThreadRunner;", "call");
@@ -232,6 +239,11 @@ public final class Main {
      * the hook's method of that name, the receiver its first parameter
      */
     static boolean redirect(MutableMethodImplementation impl, Patch patch, String owner, String name) {
+        return redirect(impl, patch, owner, name, name);
+    }
+
+    /** As above, to the hook's method `hookName` */
+    static boolean redirect(MutableMethodImplementation impl, Patch patch, String owner, String name, String hookName) {
         boolean changed = false;
         List<BuilderInstruction> insns = impl.getInstructions();
         for (int i = 0; i < insns.size(); i++) {
@@ -247,7 +259,7 @@ public final class Main {
             List<CharSequence> params = new ArrayList<>();
             params.add(owner);
             params.addAll(ref.getParameterTypes());
-            MethodReference hook = new ImmutableMethodReference(hookType(patch), name, params, ref.getReturnType());
+            MethodReference hook = new ImmutableMethodReference(hookType(patch), hookName, params, ref.getReturnType());
             redirected.add(hook);
             if (range) {
                 Instruction3rc call = (Instruction3rc) insn;
