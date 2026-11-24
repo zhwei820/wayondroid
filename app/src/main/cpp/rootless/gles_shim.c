@@ -1,8 +1,9 @@
-/* The guest's GLES driver library (libGLESv2_angle.so and
- * libGLESv1_CM_angle.so, rootless_prep.cpp) in front of ANGLE: it
+/* The guest's GLES driver library (libGLESv2_adreno.so and
+ * libGLESv1_CM_adreno.so with the GPU, else the _angle names;
+ * rootless_prep.cpp) in front of ANGLE: it
  * defines only the queries that describe the GPU. Android's EGL loader
  * takes each GL entry point it can't dlsym here from the EGL driver's
- * eglGetProcAddress, which is ANGLE's (libEGL_angle.so), so everything
+ * eglGetProcAddress, which is ANGLE's, so everything
  * else runs ANGLE's code directly.
  *
  * Apps see an Adreno 620's strings instead of ANGLE's ("ANGLE (Qualcomm,
@@ -19,7 +20,8 @@
 
 #include <GLES3/gl31.h>
 
-#define EGL_DRIVER "/vendor/lib64/egl/libEGL_angle.so"
+#define EGL_DRIVER "/vendor/lib64/egl/libEGL_adreno.so"
+#define EGL_DRIVER_ANGLE "/vendor/lib64/egl/libEGL_angle.so"
 #define VENDOR "Qualcomm"
 #define RENDERER "Adreno (TM) 620"
 #define VERSION_PREFIX "OpenGL ES 3.1 V@0502.0 (GIT@7d8a5d1cd0, I9a9f0b7e8b, 1683677478) (Date:05/09/23)"
@@ -35,8 +37,11 @@ static pthread_once_t once = PTHREAD_ONCE_INIT;
 
 static void resolve(void)
 {
+    /* The EGL library the loader took: Adreno's name with the GPU */
     void* egl = dlopen(EGL_DRIVER, RTLD_NOW | RTLD_NOLOAD);
+    if (!egl) egl = dlopen(EGL_DRIVER_ANGLE, RTLD_NOW | RTLD_NOLOAD);
     if (!egl) egl = dlopen(EGL_DRIVER, RTLD_NOW);
+    if (!egl) egl = dlopen(EGL_DRIVER_ANGLE, RTLD_NOW);
     void* (*gpa)(const char*) = egl ? (void* (*)(const char*))dlsym(egl, "eglGetProcAddress") : NULL;
     if (!gpa) return;
     real_get_string = (get_string_fn)gpa("glGetString");

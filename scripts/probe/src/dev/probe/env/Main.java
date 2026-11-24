@@ -191,6 +191,11 @@ public class Main extends Activity {
         put("gl.vendor", GLES20.glGetString(GLES20.GL_VENDOR));
         put("gl.renderer", GLES20.glGetString(GLES20.GL_RENDERER));
         put("gl.version", GLES20.glGetString(GLES20.GL_VERSION));
+        String ext = GLES20.glGetString(GLES20.GL_EXTENSIONS);
+        int[] numExt = new int[1];
+        GLES20.glGetIntegerv(0x821D /* GL_NUM_EXTENSIONS */, numExt, 0);
+        put("gl.extensions", (ext == null ? 0 : ext.split(" ").length) + " num=" + numExt[0]
+                + " angle=" + (ext != null && ext.matches("(?s).*GL_(ANGLE|CHROMIUM)_.*")));
         put("egl.vendor", EGL14.eglQueryString(d, EGL14.EGL_VENDOR));
         EGL14.eglMakeCurrent(d, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
         EGL14.eglDestroySurface(d, s);
@@ -305,6 +310,18 @@ public class Main extends Activity {
         if (bat != null) put("battery", "level=" + bat.getIntExtra("level", -1) + " plugged=" + bat.getIntExtra("plugged", -1)
                 + " status=" + bat.getIntExtra("status", -1) + " volt=" + bat.getIntExtra("voltage", -1)
                 + " temp=" + bat.getIntExtra("temperature", -1) + " tech=" + bat.getStringExtra("technology"));
+        try (java.io.FileInputStream in = new java.io.FileInputStream("/proc/self/auxv")) {
+            byte[] b = new byte[4096];
+            int len = in.read(b);
+            java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(b, 0, Math.max(len, 0)).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            StringBuilder a = new StringBuilder();
+            while (bb.remaining() >= 16) {
+                long t = bb.getLong(), v = bb.getLong();
+                if (t == 0) break;
+                if (t == 16 || t == 26 || t == 9 || t == 3) a.append(t).append('=').append(Long.toHexString(v)).append(' ');
+            }
+            put("auxv", a);
+        } catch (Exception e) { put("auxv", "ERR " + e); }
         put("Build.BOOTLOADER", Build.BOOTLOADER);
         put("prop.revision", prop("ro.revision") + " hw=" + prop("ro.boot.hardware.revision") + " bootmode=" + prop("ro.bootmode"));
         put("gl.egl.prop", prop("ro.hardware.egl"));
