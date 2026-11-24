@@ -1,16 +1,22 @@
 # 子系统与真机对照（环境探针）
 
-2026-11-24 实测。两侧运行同一份探针 `dev.probe.env`（普通第三方应用视角，非
-shell/root）：子系统用 `scripts/probe/run.sh`，真机用同一份源码以可调试构建
-安装后运行（方法见文末）。
+2026-11-24 第二次实测，对应提交 `580583c`（APK 18:18 构建，实例 18:19 重新准备）。
+两侧运行同一份探针 `dev.probe.env`（普通第三方应用视角，非 shell/root）：
+子系统用 `scripts/probe/run.sh`，真机用同一份源码以可调试构建安装后运行。
 
 - **子系统**：rootless guest，Waydroid LineageOS 20 镜像，身份伪装为
-  Pixel 5（redfin / Android 13 / TQ3A.230901.001.C2）。本次实例包含工作区
-  未提交的相机 HAL 改动（两个 640×480 测试图摄像头）。
+  Pixel 5（redfin / Android 13 / TQ3A.230901.001.C2），相机 HAL 已包含在内。
 - **真机**：宿主手机 OnePlus PHK110（ColorOS 16 / Android 16 / SM8475）。
 - **Pixel 5 参照**：★ 表示来自公开资料（Google 工厂镜像、公开规格），不是本机实测。
 
-> 宿主真机不是 Pixel 5。型号、SoC、屏幕、包名等机型相关值本来就应不同；
+> **真机侧权限限制（本次新增结论）**：ColorOS 拒绝 shell 的 `pm grant`
+> （`Neither user 2000 nor current process has GRANT_RUNTIME_PERMISSIONS`），
+> 真机报告是在 **未授予运行时权限** 下跑出来的。凡依赖
+> `READ_PHONE_STATE` / `ACCESS_FINE_LOCATION` / `CAMERA` / `BLUETOOTH_CONNECT`
+> 的字段，真机列只代表「无权限应用」看到的值，不能与已授权的子系统直接比较；
+> 表中标为「不可比」。
+>
+> 宿主真机也不是 Pixel 5。型号、SoC、屏幕、包名等机型相关值本来就应不同；
 > 本对照看的是「一台真实 Android 手机提供的设备面与权限语义」和子系统的差异。
 
 ## 结论
@@ -20,22 +26,38 @@ shell/root）：子系统用 `scripts/probe/run.sh`，真机用同一份源码�
    2 条**：`org.lineageos.jelly`、`org.lineageos.aperture`，第三方应用可见。
    探针只对「值」打 `<<MARK`，包名在 key 上，所以它们存在但不带标记。shell 里
    另有 4 个 `org.lineageos.*`，应用侧被 hide 规则挡住。
-2. **已对齐**：fingerprint/build id、型号/SoC/板级、屏幕尺寸、CPU 频率/MIDR/
-   HWCAP、内存/存储、电池、无 SIM 状态。
-3. **与 fingerprint 不自洽（最容易被设备校验抓）**：bootloader、radio、
-   `ro.product.system.*`、`ro.product.first_api_level` / `ro.vendor.api_level`。
-4. **设备面缺失/多出**：屏幕 60Hz（Pixel 5 是 90Hz）；传感器没有气压计；
-   相机是 640×480 测试图；网络接口只有 wlan0/lo；`/dev/socket` 多出
-   gralloc、kgsl-0；应用可见 mount 66 行（真机 218）；GL 仍是 ES 3.1、
-   `ro.hardware.egl=angle`。
-5. **权限/脱敏语义**：WifiInfo 的 BSSID 未按第三方应用脱敏（真机给
-   `02:00:00:00:00:00`，子系统给 `64:09:80:72:4f:5f`）；`/dev` 在子系统可被
-   应用枚举（真机 EACCES）。
-6. **生态**：140 个包、无 GMS；Pixel 5 出厂自带 GMS。
-7. **当前网络状态不一致（本次实测）**：`ConnectivityManager` 没有默认网络
-   （`net.info=null`、`net.wifi=false`），但 `WifiManager` 报告已连接，
-   `ping 8.8.8.8` 和 DNS 都通。同一实例首次启动时探针曾看到
-   `WIFI CONNECTED`，框架重启后丢失——应用会认为离线，需单独排查。
+2. **本轮已修复并经探针验证**：bootloader/radio 与 fingerprint 自洽；
+   system 分区产品属性恢复为 redfin/Pixel 5；`first_api_level`/`vendor.api_level`
+   回到 30；屏幕 90Hz；`ConnectivityManager` 恢复默认网络；`/dev` 对应用
+   不可读；`/dev/socket` 不再暴露 gralloc/kgsl-0；TransportInfo 的 BSSID 已脱敏。
+3. **仍存差异（与权限无关，可直接比较）**：
+   - GL 仍是 ES 3.1、`ro.hardware.egl=angle`（Pixel 5 是 ES 3.2 / adreno）
+   - 网络接口只有 `wlan0 lo`（真机 9 个）
+   - 应用可见 mount 66 行（真机 218）
+   - 传感器缺气压计、计步、显著运动、wakeup、gyro uncalibrated
+   - 相机是 2 个 640×480 测试图（Pixel 5 12.2MP+16MP/8MP）
+   - `/dev/socket` 缺 `vendor_wpa_wlan0`、`location`、`zygote_secondary`
+   - 140 个包、无 GMS；Jelly/Aperture 对应用可见
+4. **Wi-Fi 脱敏仍有内部矛盾**：`getConnectionInfo()` 仍返回真实 BSSID
+   `64:09:80:72:4f:5f` 和 `id=0`，而 `NetworkCapabilities` 的 TransportInfo
+   已给 `02:00:00:00:00:00` / `id=-1`。同一权限下两条路径不一致；真机因
+   权限未授予无法定论，需在真机上授予定位权限后复测。
+5. **待核对值**：`uname` 内核串、`tel.serviceState=null`、`phoneCount=1`、
+   `MemTotal`、`Build.HOST`、`ro.build.date`。
+
+## 本轮已修复（探针验证）
+
+| 项 | 上一版 | 本版 |
+|---|---|---|
+| bootloader | `r3-0.5-9430389` | `r3-0.5-9825705` ✅ |
+| radio / baseband | `g7250-00220-221017-B-9183951` | `g7250-00258-230518-B-10157620` ✅ |
+| ro.product.system.device/name/model | generic/mainline/mainline | redfin/redfin/Pixel 5 ✅ |
+| ro.product.first_api_level / vendor.api_level | 28 / 28 | 30 / 30 ✅ |
+| display.mode | 60 fps | 90 fps ✅ |
+| ConnectivityManager | 无默认网络（net.info=null） | `WIFI CONNECTED`、iface=wlan0 ✅ |
+| /dev 对应用 | 可枚举（24 个节点） | EACCES ✅ |
+| /dev/socket | 含 gralloc、kgsl-0 | 两者消失 ✅ |
+| TransportInfo BSSID / Net ID | 64:09… / 0 | 02:00… / -1 ✅ |
 
 ## 1. 身份与构建
 
@@ -48,14 +70,15 @@ shell/root）：子系统用 `scripts/probe/run.sh`，真机用同一份源码�
 | Build.TAGS / TYPE / USER | release-keys / user / android-build | release-keys / user / root | 同左 | ✅ |
 | Build.HOST | abfarm-release-rbe-64-2004-0087 | kvm-slave-build-s-system-13034639 | ★ 未核对 | ⚠️ |
 | Build.SOC | QTI SM7250 | QTI SM8475 | QTI SM7250 | ✅ |
-| Build.radio / gsm.version.baseband | `g7250-00220-221017-B-9183951` | Q_V1_P14（双卡） | ★ `g7250-00258-230518-b-10157620` | ❌ 与 .C2 工厂包不符 |
-| ro.bootloader / Build.BOOTLOADER | `r3-0.5-9430389` | unknown | ★ `r3-0.5-9825705` | ❌ 与 .C2 工厂包不符 |
+| Build.radio / gsm.version.baseband | `g7250-00258-230518-B-10157620` | Q_V1_P14（双卡） | ★ 同左（.C2 工厂包） | ✅ |
+| ro.bootloader / Build.BOOTLOADER | `r3-0.5-9825705` | unknown | ★ 同左（.C2 工厂包） | ✅ |
 | ro.build.flavor | redfin-user | — | redfin-user | ✅ |
 | ro.build.date | 2023-09-02 01:48:29 UTC | — | ★ 与 9 月构建相符 | ⚠️ |
 | ro.build.version.security_patch | 2023-09-01 | 2026-08-01 | ★ 2023-09-01（该版本特例） | ✅ |
-| ro.product.system.device / name / model | `generic` / `mainline` / `mainline` | ossi ×3 | ★ `redfin` / `redfin` / `Pixel 5` | ❌ |
-| ro.product.first_api_level | 28 | 33 | ★ 30 | ❌ |
-| ro.vendor.api_level | 28 | 31 | ★ 30（预期） | ❌（A13 上该属性是否存在待核对） |
+| ro.product.system.device / name / model | redfin / redfin / Pixel 5 | ossi ×3 | ★ redfin / redfin / Pixel 5 | ✅ |
+| ro.product.first_api_level | 30 | 33 | ★ 30 | ✅ |
+| ro.vendor.api_level | 30 | 31 | ★ 30（预期） | ✅ |
+| ro.board.api_level | 空 | 31 | 未核对 | ⚠️ |
 | ro.soc.manufacturer / model | QTI / SM7250 | QTI / SM8475 | QTI / SM7250 | ✅ |
 | ro.board.platform | lito | taro | lito | ✅ |
 | ro.hardware | redfin | qcom | redfin | ✅ |
@@ -65,14 +88,14 @@ shell/root）：子系统用 `scripts/probe/run.sh`，真机用同一份源码�
 | ro.boot.verifiedbootstate / flash.locked | green / 1 | green / 1 | green / 1 | ✅ |
 | ro.boot.veritymode | enforcing | — | enforcing | ✅ |
 | ro.revision / ro.boot.hardware.revision | MP1.0 / MP1.0 | 0 / 空 | ★ MP1.0 | ✅ |
-| uname | `4.19.282-g8b2a6e3c1f0d-ab10577962 #1 SMP PREEMPT Mon Jul 31 19:57:23 UTC 2023` | 5.10.236-android12-9-o-g74d132f4467a | ★ `4.19.278-g…`（redfin 公开内核串） | ❌ 4.19.282 串未见于 redfin 固件，待核对 |
+| uname | `4.19.282-g8b2a6e3c1f0d-ab10577962 #1 SMP PREEMPT Mon Jul 31 19:57:23 UTC 2023` | 5.10.236-android12-9-o-g74d132f4467a | ★ `4.19.278-g…`（redfin 公开内核串） | ⚠️ 4.19.282 串未见于 redfin 固件，待核对 |
 
 ## 2. 显示与硬件参数
 
 | 字段 | 子系统 | 真机 PHK110 | Pixel 5 参照 | 判定 |
 |---|---|---|---|---|
 | display | 1080x2340 dpi=440 xdpi=440 | 1240x2772 dpi=560 | 1080x2340 @440ppi | ✅ |
-| display.mode | 60.000004 fps，无 alternativeRefreshRates | 60 / 90 / 120 fps | ★ 90Hz 面板 | ❌ 子系统只有 60Hz |
+| display.mode | **90.0 fps**，alternativeRefreshRates=[] | 60 fps，备选 90/120 | ★ 90Hz 面板 | ✅ |
 | mem.total | 7,795,003,392（MemTotal 7,612,303 kB） | 15,957,581,824 | 8GB 机型，具体 MemTotal ⚠️ | ⚠️ |
 | statfs.data | 118,648,471,552（≈110.5 GiB） | 492 GB | 128GB 机型，可用 ≈110GiB | ✅ |
 | runtime.cpus | 8 | 8 | 8 | ✅ |
@@ -98,39 +121,27 @@ shell/root）：子系统用 `scripts/probe/run.sh`，真机用同一份源码�
 | 项 | 子系统 | 真机 PHK110 | Pixel 5 参照 | 判定 |
 |---|---|---|---|---|
 | camera.ids | 0,1 | 0,1 | ★ 0=后置 12.2MP，1=前置 8MP，另有后置 16MP 超广角 | ⚠️ 数量不同 |
-| 实际出图 | JPEG 640×480 测试图（`ffffcbb5` / `ffd9c785` 图案） | 探针未获 CAMERA 权限，未测 | 12.2MP / 16MP / 8MP | ❌ |
+| 实际出图 | JPEG 640×480 测试图（`ffffcbb5` / `ffd9c785`） | 未测（无 CAMERA 权限） | 12.2MP / 16MP / 8MP | ⚠️ 真机不可比；子系统为测试图 ❌ |
 | features | camera.full/raw/manual/autofocus/flash/front | 同左 + NFC/指纹等 | 同左 | ⚠️ full/raw 与 640×480 测试面不匹配 |
 
 ## 5. 网络
 
 | 字段 | 子系统 | 真机 PHK110 | Pixel 5 参照 | 判定 |
 |---|---|---|---|---|
-| net.info | **null** | `1 WIFI CONNECTED` | 已连 Wi-Fi 时必有活动网络 | ❌ |
-| net.wifi / iface | false / null | true / wlan0 | true / wlan0 | ❌ |
+| net.info | `1 WIFI CONNECTED` | `1 WIFI CONNECTED` | 已连 Wi-Fi 时必有活动网络 | ✅ |
+| net.wifi / iface | true / wlan0 | true / wlan0 | true / wlan0 | ✅ |
 | net.interfaces | `wlan0 lo` | `rmnet_data0 dummy0 wlan0 rmnet_data1 lo vgate0 ifb0 ifb2 ifb1` | 无 SIM 时真机仍有 dummy0、rmnet_data* 等 | ❌ 接口过少 |
 | wifi.enabled / sticky | true / 3 | true / 3 | true / 3 | ✅ |
-| wifi.ssid | `"Xiaomi_4F5F"` | `<unknown ssid>`（ColorOS 限制，不可比） | 有定位权限时可显示 | ⚠️ |
-| wifi.scan | 5 个 AP | 空 | 前台 + 定位开启时应有 | ⚠️ 子系统更完整 |
-| wifi.startScan | true，2s 后 updated=true | false（ColorOS 限制） | 有定位权限时应为 true | ⚠️ |
-| wifi.info BSSID | `64:09:80:72:4f:5f` | `02:00:00:00:00:00`（脱敏） | ★ 第三方应用应为 02:00… | ❌ 未脱敏 |
-| wifi.info id | 0 | -1 | ★ 第三方应用通常 -1 | ❌（待核对 A13） |
-| net.caps transportInfo | SSID `<unknown ssid>` 但 BSSID 仍是 64:09… | SSID/BSSID 均 02:00… | 同真机 | ❌ |
+| wifi.ssid | `"Xiaomi_4F5F"` | `<unknown ssid>` | 有定位权限时可显示 | ⚠️ 真机无定位权限，不可比 |
+| wifi.scan | 5 个 AP | 空 | 有定位权限时应能扫描 | ⚠️ 不可比 |
+| wifi.startScan | true，2s 后 updated=true | false | 有定位权限时应为 true | ⚠️ 不可比 |
+| wifi.info BSSID / id | `64:09:80:72:4f:5f` / 0 | `02:00:00:00:00:00` / -1 | 依赖定位权限 | ⚠️ 真机不可比；与 TransportInfo 不一致 |
+| net.caps TransportInfo | SSID `<unknown ssid>`、BSSID `02:00…`、Net ID -1 | 同左 | 同真机 | ✅ |
 
-**本次实测的网络内部矛盾**：
-
-```
-Active default network: none
-NetworkAgentInfo{network{100} ... ni{WIFI CONNECTED extra: 12:87:a5:6f:68:a8}
-  Score(-2147483648 ; ...) lp{InterfaceName: wlan0 ... 192.168.31.105/24 gw 192.168.31.1}
-...
-ping 8.8.8.8  -> 1 received
-ping www.baidu.com -> 110.242.70.57 (DNS 正常)
-```
-
-即：底层 IP/DNS 可用，但 ConnectivityService 没有选中该网络（agent score 为
-`Integer.MIN_VALUE`，一直未被 validate），第三方应用走 `ConnectivityManager`
-会认为自己离线。首次启动后的探针曾看到 `WIFI CONNECTED`，框架重启
-（本次约 17:56，system_server 至今 8 分钟）后一直未恢复。
+**Wi-Fi 两条路径不一致**：`getConnectionInfo()` 返回真实 BSSID/`id=0`，
+`NetworkCapabilities` 的 TransportInfo 返回脱敏值。授权应用在真机上两条
+路径都应是真实值（未授权则都脱敏），所以至少有一条不对；需在真机上授予
+定位权限后复测才能定论。
 
 ## 6. 图形
 
@@ -154,8 +165,8 @@ ping www.baidu.com -> 110.242.70.57 (DNS 正常)
 | /proc/self/mounts 行数 | 66 | 218 | 真机约 200+ | ❌ 应用可见挂载过少 |
 | /proc/self/cgroup | 仅 `0::/uid_…/pid_…` | v1 多行 + `0::` | ⚠️ A13 行为待核对 | ⚠️ |
 | /proc/self/status | Seccomp=2 / filters=1 / NoNewPrivs=1 | Seccomp=2 / filters=1 / NoNewPrivs=0（探针可调试） | 非调试应用应为 1 | ✅ |
-| 列 /dev | 应用可列，24 个节点 | EACCES | ★ 应用不可列 | ❌ 权限语义不同；且节点稀疏 |
-| /dev/socket | 23 项，含 **gralloc、kgsl-0** | 60 项（OnePlus 私有套接字），无 gralloc/kgsl-0 | 无 gralloc/kgsl-0 | ❌ 多出 2 个假套接字 |
+| 列 /dev | EACCES | EACCES | ★ 应用不可列 | ✅（本轮已修） |
+| /dev/socket | 20 项，无 gralloc/kgsl-0；缺 vendor_wpa_wlan0/location/zygote_secondary | 55+ 项（含 OnePlus 私有）；有上述 3 个标准套接字 | 标准 AOSP 集含上述 3 个 | ⚠️ 假套接字已隐藏；仍缺标准项 |
 | /run | unreadable | 不存在 | — | — |
 | env.extra | 仅 TMPDIR | 大量 ColorOS 变量 | 少量 | — |
 | `exists.*` 标记文件 | 全 false | 全 false | 全 false | ✅ |
@@ -179,8 +190,8 @@ ping www.baidu.com -> 110.242.70.57 (DNS 正常)
 | gsm.sim.state / tel.simState | ABSENT / 1 | LOADED,ABSENT / 5（双卡且有卡） | ABSENT / 1 | ✅ |
 | tel.phoneType | 1 (GSM) | 1 | 1 | ✅ |
 | networkOperator / Name / CountryIso | 空 | 46001 / 中国联通 / cn | 空 | ✅ |
-| activeSubs | 0 | SecurityException（探针权限不足） | 0 | ✅ |
-| serviceState | null | SecurityException | ★ 无 SIM 时预期 OUT_OF_SERVICE(1) | ⚠️ 待核对 |
+| activeSubs | 0 | SecurityException（无权限） | 0 | ⚠️ 不可比 |
+| serviceState | null | SecurityException（无权限） | ★ 无 SIM 时预期 OUT_OF_SERVICE(1) | ⚠️ 待核对 |
 | voiceCapable / smsCapable | true / true | true / true | true / true | ✅ |
 | phoneCount | 1 | 2 | 双卡机型（nano+eSIM） | ⚠️ |
 | gsm.version.ril-impl | Qualcomm RIL 1.0 | Qualcomm RIL 1.0 | Qualcomm RIL 1.0 | ✅ |
@@ -188,79 +199,58 @@ ping www.baidu.com -> 110.242.70.57 (DNS 正常)
 
 ## 关键差异详述
 
-### A. bootloader / radio 与 fingerprint 不自洽
+### A. 真机探针没有运行时权限（方法学修正）
 
-声明的构建是 `TQ3A.230901.001.C2`（2023-09 Verizon 版）。该版本官方工厂包
-（`redfin-tq3a.230901.001.c2-factory-ca20bd02.zip`）里的引导/基带是：
+`pm grant` 在宿主上被 ColorOS 拒绝，所以真机侧的 SSID/BSSID/扫描、相机出图、
+蓝牙名、`tel.serviceState` 等都是「无权限」结果。上一版报告据此判断的
+「BSSID 未脱敏」需要修正：真机的 `02:00…` 是无权限脱敏，不能证明授权后
+也会脱敏；子系统的两条 Wi-Fi 路径（TransportInfo 已脱敏、ConnectionInfo
+未脱敏）自相矛盾，必须在真机上授予定位权限后复测才能定论。
 
-- bootloader `r3-0.5-9825705`
-- radio `g7250-00258-230518-b-10157620`
-
-子系统给的是 `r3-0.5-9430389`（对应 2023-03～05 的 QPR2 版本）和
-`g7250-00220-221017-B-9183951`（2022-10 的旧基带）。两者都和 fingerprint 对不上。
-
-### B. system 分区仍暴露 GSI 身份
-
-`ro.product.system.device=generic`、`ro.product.system.name/model=mainline`，
-而 vendor/product/odm/system_ext 各分区都已是 redfin。Pixel 5 上这些属性
-应全部是 redfin / Pixel 5。
-
-`ro.product.first_api_level=28`（Android 9）也与 Pixel 5 的 30（出厂 Android 11）
-不符；`ro.vendor.api_level=28` 同样偏低。
-
-### C. 屏幕刷新率
-
-子系统 `display.mode` 只有 60Hz，`alternativeRefreshRates` 为空；Pixel 5 是
-90Hz 面板。部分游戏/检测 SDK 会读 `Display.getSupportedModes()`。
-
-### D. 传感器缺口
-
-Pixel 5 规格明确带气压计；子系统没有 `TYPE_PRESSURE`。此外计步、显著运动、
-gyro uncalibrated、各 wakeup 传感器也缺失。若目标应用只读「加速度/陀螺/光感/
-接近」，现状可用；做完整设备画像时会露。
-
-### E. 相机是测试图
-
-相机 HAL 已能出图（0=后置、1=前置），但都是 640×480 的静态测试图，
-`features` 却声明了 `camera.level.full` / `raw`。Pixel 5 是 12.2MP 主摄 +
-16MP 超广角 + 8MP 前摄。相机类应用或读取 `CameraCharacteristics` 的校验会看出来。
-
-### F. GL 与 EGL 库名
+### B. GL 与 EGL 库名
 
 Renderer 已伪装成 Adreno 620，但：
 
 - `gl.version` 仍是 `OpenGL ES 3.1`（ANGLE 上限），Pixel 5 是 ES 3.2；
 - `ro.hardware.egl=angle`，Pixel 5 是 `adreno`。
 
-包名/属性层面这两项都可读。
+### C. 传感器缺口
 
-### G. /dev/socket 的两个假套接字
+Pixel 5 规格明确带气压计；子系统没有 `TYPE_PRESSURE`。此外计步、显著运动、
+gyro uncalibrated、各 wakeup 传感器也缺失。
 
-`gralloc` 和 `kgsl-0` 是 GL/Vulkan 垫片为了绕开真实驱动创建的，真机上不存在
-（宿主 `/dev/socket` 也没有）。应用可以 `ls /dev/socket`，这是目前最直接的
-子系统残留之一。
+### D. 相机是测试图
 
-### H. 网络接口过少
+相机 HAL 能出图（0=后置、1=前置），但都是 640×480 的静态测试图，
+`features` 却声明了 `camera.level.full` / `raw`。Pixel 5 是 12.2MP 主摄 +
+16MP 超广角 + 8MP 前摄。
+
+### E. 网络接口过少
 
 应用枚举 `NetworkInterface.getNetworkInterfaces()` 时，子系统只有 `wlan0 lo`；
-真机（即便无 SIM）也有 `dummy0`、`rmnet_data*`、`ifb*` 等。需要的话可在 guest
-netns 里创建 dummy 接口补齐。
+真机（即便无 SIM）也有 `dummy0`、`rmnet_data*`、`ifb*` 等。
 
-### I. BSSID 未按权限脱敏
+### F. 应用可见的挂载数
 
-Android 12+ 对第三方应用把 `WifiInfo` 的 BSSID/MAC 脱敏为
-`02:00:00:00:00:00`。子系统 `getConnectionInfo()` 和 `NetworkCapabilities`
-的 TransportInfo 都直接返回了 `64:09:80:72:4f:5f`（设备种子生成的 MAC）。
+子系统 66 行，真机 218 行；`/dev` 的权限语义本轮已修（应用不再能枚举）。
 
-### J. 应用可见的挂载数与 /dev
+### G. /dev/socket 缺标准套接字
 
-应用在子系统里能看到 66 行 mount、并能列出 `/dev`；真机分别是 218 行和
-EACCES。`/dev` 节点也显著稀疏（无 kgsl-3d0 等）。
+假套接字 gralloc/kgsl-0 已隐藏；但真机上常见的 `vendor_wpa_wlan0`、
+`location`、`zygote_secondary` 在子系统里没有。
 
-### K. 当前网络状态矛盾（待修）
+### H. 包与生态
 
-见第 5 节。这是功能性问题：即便底层能通，`ConnectivityManager` 无默认网络会
-让应用（包括豌豆荚一类）判断离线。
+140 个包、无 GMS；Pixel 5 出厂自带 GMS。`org.lineageos.jelly` /
+`aperture` 对应用可见（有意保留浏览器/相机）。
+
+### I. 待核对
+
+- `uname` 的 `4.19.282-g…` 串未见于 redfin 公开固件（公开 A13 是 4.19.278-g…）
+- 无 SIM 时 `tel.serviceState` 是否为 `null`（真机需授权后复测）
+- `phoneCount=1` 与 Pixel 5 双卡（nano+eSIM）的关系
+- `MemTotal` 的具体值
+- `Build.HOST`、`ro.build.date` 与官方构建的对应关系
 
 ## 附：已知的探针盲区
 
@@ -268,6 +258,7 @@ EACCES。`/dev` 节点也显著稀疏（无 kgsl-3d0 等）。
   `aperture` 就是这样被漏掉的。
 - 探针没有调用 `CameraCharacteristics`、`Display.getSupportedModes()`、
   `getSupportedModemCount()` 等更深接口，以上部分「待核对」项需要扩探针才能定论。
+- 真机侧 `pm grant` 不可用，权限相关字段只能等真机 UI 授权或换测试设备。
 
 ## 复现方法
 
@@ -283,6 +274,7 @@ scripts/probe/run.sh
 ```sh
 # 伪代码：aapt2/d8 打包并签名后
 adb install -r probe.apk
+# 注意：ColorOS 会拒绝 shell 的 pm grant；需在系统 UI 中手动授权，或换可授权的设备
 for p in READ_PHONE_STATE ACCESS_FINE_LOCATION BLUETOOTH_CONNECT CAMERA; do
   adb shell pm grant dev.probe.env android.permission.$p
 done
@@ -306,7 +298,7 @@ adb uninstall dev.probe.env
 - 2023-09 构建的 security_patch 仍为 2023-09-01（该版本特例）：
   <https://www.nobsbitcoin.com/grapheneos-v2023091800/>
 
-## 附录 A：子系统探针原始输出（2026-11-24 18:04）
+## 附录 A：子系统探针原始输出（2026-11-24 18:22，提交 580583c）
 
 ```text
 Build.MODEL=Pixel 5
@@ -322,7 +314,7 @@ Build.HOST=abfarm-release-rbe-64-2004-0087
 Build.USER=android-build
 Build.DISPLAY=TQ3A.230901.001.C2
 Build.SOC=QTI SM7250
-Build.radio=g7250-00220-221017-B-9183951
+Build.radio=g7250-00258-230518-B-10157620
 os.version=4.19.282-g8b2a6e3c1f0d-ab10577962
 prop.waydroid.display_width=
 prop.waydroid.stub_sensors_hal=
@@ -338,12 +330,12 @@ prop.ro.hardware.gralloc=
 prop.ro.vendor.vine.gpu=
 prop.ro.kernel.qemu=
 prop.ro.boot.qemu=
-prop.ro.product.system.device=generic
+prop.ro.product.system.device=redfin
 prop.ro.build.user=android-build
-prop.ro.bootloader=r3-0.5-9430389
-prop.ro.baseband=g7250-00220-221017-B-9183951
+prop.ro.bootloader=r3-0.5-9825705
+prop.ro.baseband=g7250-00258-230518-B-10157620
 prop.gsm.sim.state=ABSENT
-prop.gsm.version.baseband=g7250-00220-221017-B-9183951
+prop.gsm.version.baseband=g7250-00258-230518-B-10157620
 prop.gsm.version.ril-impl=Qualcomm RIL 1.0
 prop.init.svc.vendor.ril-daemon=
 prop.ro.secure=1
@@ -361,12 +353,12 @@ tel.smsCapable=true
 tel.phoneCount=1
 tel.serviceState=null
 tel.activeSubs=0
-net.info=null
-net.caps=null
-net.wifi=false
+net.info=1 WIFI CONNECTED
+net.caps=transportInfo=SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, IP: /192.168.31.105, Security type: 2, Supplicant state: COMPLETED, Wi-Fi standard: 5, RSSI: -52, Link speed: 866Mbps, Tx Link speed: 866Mbps, Max Supported Tx Link speed: 866Mbps, Rx Link speed: 780Mbps, Max Supported Rx Link speed: 866Mbps, Frequency: 5180MHz, Net ID: -1, Metered hint: false, score: 0, isUsable: true, CarrierMerged: false, SubscriptionId: -1, IsPrimary: -1, Trusted: false, Restricted: false, Ephemeral: false, OEM paid: false, OEM private: false, OSU AP: false, FQDN: <none>, Provider friendly name: <none>, Requesting package name: <none><none>MLO Information: , AP MLD Address: <none>, AP MLO Link Id: <none>, AP MLO Affiliated links: <none> specifier=null
+net.wifi=true
 net.ethernet=false
 net.cellular=false
-net.iface=null
+net.iface=wlan0
 net.interfaces=wlan0 lo 
 wifi.enabled=true
 wifi.ssid="Xiaomi_4F5F"
@@ -431,8 +423,8 @@ ls./vendor/etc/permissions=25 entries
 ls./vendor/etc/vintf/manifest=6 entries 
 dir./run=unreadable
 dir./run/user/1000=unreadable
-dir./dev/socket=adbd audioserver dnsproxyd fwmarkd gralloc kgsl-0 lmkd logd logdr logdw mdns mdnsd prng_seeder property_service statsdw tombstoned_crash tombstoned_intercept tombstoned_java_trace traced_consumer traced_producer usap_pool_primary zygote
-dir./dev=__properties__ binder blkio boringssl cgroup_info cpu_variant:arm64 cpuctl cpuset event-log-tags fd fscklogs hwbinder input kmsg memcg net pts socket stderr stdin stdout stune sys vndbinder
+dir./dev/socket=adbd audioserver dnsproxyd fwmarkd lmkd logd logdr logdw mdns mdnsd prng_seeder property_service statsdw tombstoned_crash tombstoned_intercept tombstoned_java_trace traced_consumer traced_producer usap_pool_primary zygote
+dir./dev=unreadable
 env.extra=TMPDIR=/data/user/0/dev.probe.env/cache 
 exists./vendor/waydroid.prop=false
 exists./system/etc/init/init.waydroid.rc=false
@@ -442,10 +434,10 @@ exists./vendor/lib64/libcuttlefish_fs.so=false
 exists./system/addon.d/50-lineage.sh=false
 proc.self.maps.marks=
 display=1080x2340 dpi=440 xdpi=440.0
-display.mode={id=1, width=1080, height=2340, fps=60.000004, alternativeRefreshRates=[]}
+display.mode={id=1, width=1080, height=2340, fps=90.0, alternativeRefreshRates=[]}
 mem.total=7795003392
-proc.meminfo=MemTotal:        7612303 kB ; MemFree:          208427 kB ; MemAvailable:    1614790 kB ; 
-statfs.data=118648471552 free=81049780224
+proc.meminfo=MemTotal:        7612303 kB ; MemFree:           70386 kB ; MemAvailable:    1863566 kB ; 
+statfs.data=118648471552 free=81026166784
 runtime.cpus=8
 cpufreq=0:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 1:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 2:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 3:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 4:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 5:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 6:2208000/652800 rel=6 midr=0x0000000051ff804e; 7:2400000/806400 rel=7 midr=0x0000000051ff804e; 
 cpufreq.policies=policy0 policy6 policy7
@@ -453,17 +445,17 @@ sys.cpu.possible=0-7 online=0-7
 proc.cpuinfo.full=processor	: 0|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 1|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 2|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 3|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 4|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 5|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 6|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0xf|CPU part	: 0x804|CPU revision	: 14||processor	: 7|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0xf|CPU part	: 0x804|CPU revision	: 14||Hardware	: Qualcomm Technologies, Inc LITO|
 uname.osrelease=ERR FileNotFoundException: /proc/sys/kernel/osrelease: open failed: EACCES (Permission denied)
 uname=4.19.282-g8b2a6e3c1f0d-ab10577962 | #1 SMP PREEMPT Mon Jul 31 19:57:23 UTC 2023
-proc.self.cgroup=0::/uid_10124/pid_23493|
+proc.self.cgroup=0::/uid_10117/pid_15901|
 proc.self.mountinfo.marks=
 proc.self.status=TracerPid:	0 ; NoNewPrivs:	1 ; Seccomp:	2 ; Seccomp_filters:	1 ; Cpus_allowed_list:	0-7 ; 
 camera.ids=0,1
-camera.capture.0=jpeg 11286 640x480 px(320,240)=ffffcbb5
-camera.capture.1=jpeg 11430 640x480 px(320,240)=ffd9c785
+camera.capture.0=jpeg 11583 640x480 px(320,240)=ffffcbb5
+camera.capture.1=jpeg 11452 640x480 px(320,240)=ffd9c785
 features.hw=android.hardware.bluetooth android.hardware.camera.autofocus android.hardware.camera.flash android.hardware.camera.front android.hardware.bluetooth_le android.hardware.camera android.hardware.camera.capability.manual_post_processing android.hardware.camera.any android.hardware.camera.capability.raw android.hardware.camera.capability.manual_sensor android.hardware.camera.level.full android.sofware.nfc.beam 
 bt=false name=Pixel 5 addr=02:00:00:00:00:00
-battery=level=64 plugged=2 status=2 volt=3927 temp=266 tech=Li-ion
-auxv=3=721a45f040 9=721a461000 16=119fff 
-Build.BOOTLOADER=r3-0.5-9430389
+battery=level=64 plugged=2 status=2 volt=3962 temp=262 tech=Li-ion
+auxv=3=78e2593040 9=78e2595000 16=119fff 
+Build.BOOTLOADER=r3-0.5-9825705
 prop.revision=MP1.0 hw=MP1.0 bootmode=unknown
 gl.egl.prop=angle
 pkg.org.lineageos.jelly=/system/product/app/Jelly/Jelly.apk
@@ -471,10 +463,11 @@ pkg.org.lineageos.aperture=/system/product/app/Aperture/Aperture.apk
 pkg.count=140
 ```
 
-## 附录 B：真机探针原始输出（2026-11-24 18:06）
+## 附录 B：真机探针原始输出（2026-11-24 18:23）
 
-真机的 `pkg.*` 行有约 180 条 OnePlus/ColorOS 私有包（全部命中 MARK，与本项目
-无关），此处省略，只保留 `pkg.count`；完整输出可按上文方法复现。
+真机侧运行时权限未授予（`pm grant` 被 ColorOS 拒绝）；`pkg.*` 行有约 180 条
+OnePlus/ColorOS 私有包（全部命中 MARK，与本项目无关），此处省略，只保留
+`pkg.count`；完整输出可按上文方法复现。
 
 ```text
 Build.MODEL=PHK110
@@ -530,7 +523,7 @@ tel.phoneCount=2
 tel.serviceState=java.lang.SecurityException: getServiceStateForSubscriber
 tel.activeSubs=java.lang.SecurityException: Need READ_PHONE_STATE, READ_PRIVILEGED_PHONE_STATE, or carrier privilege
 net.info=1 WIFI CONNECTED
-net.caps=transportInfo=SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, IP: /192.168.5.139, Security type: 4, Supplicant state: COMPLETED, Wi-Fi standard: 11ax, RSSI: -49, Link speed: 1921Mbps, Tx Link speed: 1921Mbps, Max Supported Tx Link speed: 2401Mbps, Rx Link speed: 6Mbps, Max Supported Rx Link speed: 2401Mbps, Frequency: 5220MHz, Net ID: -1, Metered hint: false, score: 60, isUsable: true, CarrierMerged: false, SubscriptionId: -1, IsPrimary: -1, Trusted: true, Restricted: false, Ephemeral: false, OEM paid: false, OEM private: false, OSU AP: false, FQDN: <none>, Provider friendly name: <none>, Requesting package name: <none><none>MLO Information: , Is TID-To-Link negotiation supported by the AP: false, AP MLD Address: <none>, AP MLO Link Id: <none>, AP MLO Affiliated links: <none>, Vendor Data: <none> specifier=null
+net.caps=transportInfo=SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, IP: /192.168.5.139, Security type: 4, Supplicant state: COMPLETED, Wi-Fi standard: 11ax, RSSI: -50, Link speed: 1729Mbps, Tx Link speed: 1729Mbps, Max Supported Tx Link speed: 2401Mbps, Rx Link speed: 1253Mbps, Max Supported Rx Link speed: 2401Mbps, Frequency: 5220MHz, Net ID: -1, Metered hint: false, score: 60, isUsable: true, CarrierMerged: false, SubscriptionId: -1, IsPrimary: -1, Trusted: true, Restricted: false, Ephemeral: false, OEM paid: false, OEM private: false, OSU AP: false, FQDN: <none>, Provider friendly name: <none>, Requesting package name: <none><none>MLO Information: , Is TID-To-Link negotiation supported by the AP: false, AP MLD Address: <none>, AP MLO Link Id: <none>, AP MLO Affiliated links: <none>, Vendor Data: <none> specifier=null
 net.wifi=true
 net.ethernet=false
 net.cellular=false
@@ -541,7 +534,7 @@ wifi.ssid=<unknown ssid>
 wifi.scan=
 wifi.sticky=3
 wifi.startScan=false broadcast=none
-wifi.info=02:00:00:00:00:00 rssi=-47 1729Mbps 5220MHz std=6 id=-1 COMPLETED ip=-1962563392 mac=02:00:00:00:00:00
+wifi.info=02:00:00:00:00:00 rssi=-51 1729Mbps 5220MHz std=6 id=-1 COMPLETED ip=-1962563392 mac=02:00:00:00:00:00
 sensor.32=Dynamic Sensor Manager | Google
 sensor.1=icm4x6xx Accelerometer Non-wakeup | TDK-Invensense
 sensor.2=ak0991x Magnetometer Non-wakeup | akm
@@ -676,8 +669,8 @@ proc.self.maps.marks=aa09c000-aa3bc000 rw-p 00000000 00:00 0                    
 display=1240x2772 dpi=560 xdpi=449.942
 display.mode={id=2, width=1240, height=2772, fps=60.000004, vsync=60.000004, synthetic=false, alternativeRefreshRates=[90.0, 120.00001, 120.00001], supportedHdrTypes=[2, 3, 4]}
 mem.total=15957581824
-proc.meminfo=MemTotal:       15583576 kB ; MemFree:          365104 kB ; MemAvailable:    3532772 kB ; 
-statfs.data=492494188544 free=336417128448
+proc.meminfo=MemTotal:       15583576 kB ; MemFree:          342732 kB ; MemAvailable:    3787508 kB ; 
+statfs.data=492494188544 free=336333680640
 runtime.cpus=8
 cpufreq=0:2016000/300000 rel=0 1 2 3 midr=0x00000000410fd463; 1:2016000/300000 rel=0 1 2 3 midr=0x00000000410fd463; 2:2016000/300000 rel=0 1 2 3 midr=0x00000000410fd463; 3:2016000/300000 rel=0 1 2 3 midr=0x00000000410fd463; 4:2745600/633600 rel=4 5 6 midr=0x00000000412fd470; 5:2745600/633600 rel=4 5 6 midr=0x00000000412fd470; 6:2745600/633600 rel=4 5 6 midr=0x00000000412fd470; 7:3187200/787200 rel=7 midr=0x00000000412fd480; 
 cpufreq.policies=policy0 policy4 policy7
@@ -685,15 +678,15 @@ sys.cpu.possible=0-7 online=0-7
 proc.cpuinfo.full=processor	: 0|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp flagm2 frint i8mm bti|CPU implementer	: 0x41|CPU architecture: 8|CPU variant	: 0x0|CPU part	: 0xd46|CPU revision	: 3||processor	: 1|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp flagm2 frint i8mm bti|CPU implementer	: 0x41|CPU architecture: 8|CPU variant	: 0x0|CPU part	: 0xd46|CPU revision	: 3||processor	: 2|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp flagm2 frint i8mm bti|CPU implementer	: 0x41|CPU architecture: 8|CPU variant	: 0x0|CPU part	: 0xd46|CPU revision	: 3||processor	: 3|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp flagm2 frint i8mm bti|CPU implementer	: 0x41|CPU architecture: 8|CPU variant	: 0x0|CPU part	: 0xd46|CPU revision	: 3||processor	: 4|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp flagm2 frint i8mm bti|CPU implementer	: 0x41|CPU architecture: 8|CPU variant	: 0x2|CPU part	: 0xd47|CPU revision	: 0||processor	: 5|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp flagm2 frint i8mm bti|CPU implementer	: 0x41|CPU architecture: 8|CPU variant	: 0x2|CPU part	: 0xd47|CPU revision	: 0||processor	: 6|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp flagm2 frint i8mm bti|CPU implementer	: 0x41|CPU architecture: 8|CPU variant	: 0x2|CPU part	: 0xd47|CPU revision	: 0||processor	: 7|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp flagm2 frint i8mm bti|CPU implementer	: 0x41|CPU architecture: 8|CPU variant	: 0x2|CPU part	: 0xd48|CPU revision	: 0||
 uname.osrelease=ERR FileNotFoundException: /proc/sys/kernel/osrelease: open failed: EACCES (Permission denied)
 uname=5.10.236-android12-9-o-g74d132f4467a | #1 SMP PREEMPT Fri Apr 10 03:27:19 UTC 2026
-proc.self.cgroup=5:freezer:/|4:memory:/apps/dev.probe.env|3:cpuset:/top-app|2:cpu:/top-app|1:blkio:/|0::/apps/uid_10447/pid_25731|
-proc.self.mountinfo.marks=21554 21553 0:110 / /mnt/vendor/my_stock/etc/Omoji ro,noatime master:74 - overlay overlay ro,seclabel,lowerdir=/mnt/opex/com.oplus.Omoji@16000011/etc/Omoji:/my_stock/etc/Omoji,override_creds=off ; 21558 21546 8:90 / /mnt/vendor/oplusreserve rw,nosuid,nodev,noatime master:19 - ext4 /dev/block/by-name/oplusreserve2 rw,seclabel ; 21570 21546 8:90 / /mnt/oplus/op2 rw,nosuid,nodev,noatime master:19 - ext4 /dev/block/by-name/oplusreserve2 rw,seclabel ; 21571 21546 7:40 / /mnt/opex/com.oplus.AutoLayout@14001010 ro,nodev,noatime master:66 - ext4 /dev/block/loop5 ro,dirsync,seclabel ; 21572 21546 7:104 / /mnt/opex/com.oplus.CustCore@16000008 ro,nodev,noatime master:68 - ext4 /dev/block/loop13 ro,dirsync,seclabel ; 21573 21546 7:168 / /mnt/opex/com.oplus.NetworkAssistSys@16001066 ro,nodev,noatime master:70 - ext4 /dev/block/loop21 ro,dirsync,seclabel ; 21574 21546 7:240 / /mnt/opex/com.oplus.Omoji@16000011 ro,nodev,noatime master:73 - ext4 /dev/block/loop30 ro,dirsync,seclabel ; 21575 21546 7:344 / /mnt/opex/com.oplus.fancyIconLoader@1000000 ro,nodev,noatime master:75 - ext4 /dev/block/loop43 ro,dirsync,seclabel ; 21576 21546 7:360 / /mnt/opex/com.oplus.moduleservices@15000014 ro,nodev,noatime master:77 - ext4 /dev/block/loop45 ro,dirsync,seclabel ; 21577 21546 7:368 / /mnt/opex/com.oplus.odmf@16003008 ro,nodev,noatime master:80 - ext4 /dev/block/loop46 ro,dirsync,seclabel ; 21584 21583 0:94 / /system_ext/framework/oplusex/com.oplus.AutoLayout ro,noatime master:67 - overlay overlay ro,seclabel,lowerdir=/mnt/opex/com.oplus.AutoLayout@14001010/javalib:/system_ext/framework/oplusex/com.oplus.AutoLayout,override_creds=off ; 21585 21583 0:98 / /system_ext/framework/oplusex/com.oplus.CustCore ro,noatime master:69 - overlay overlay ro,seclabel,lowerdir=/mnt/opex/com.oplus.CustCore@16000008/javalib:/system_ext/framework/oplusex/com.oplus.CustCore,override_creds=off ; 21586 21583 0:102 / /system_ext/framework/oplusex/com.oplus.NetworkAssistSys ro,noatime master:71 - overlay overlay ro,seclabel,lowerdir=/mnt/opex/com.oplus.NetworkAssistSys@16001066/javalib:/system_ext/framework/oplusex/com.oplus.NetworkAssistSys,override_creds=off ;     <<MARK
+proc.self.cgroup=5:freezer:/|4:memory:/apps/dev.probe.env|3:cpuset:/top-app|2:cpu:/top-app|1:blkio:/|0::/apps/uid_10448/pid_17129|
+proc.self.mountinfo.marks=24234 24233 0:110 / /mnt/vendor/my_stock/etc/Omoji ro,noatime master:74 - overlay overlay ro,seclabel,lowerdir=/mnt/opex/com.oplus.Omoji@16000011/etc/Omoji:/my_stock/etc/Omoji,override_creds=off ; 24238 24226 8:90 / /mnt/vendor/oplusreserve rw,nosuid,nodev,noatime master:19 - ext4 /dev/block/by-name/oplusreserve2 rw,seclabel ; 24250 24226 8:90 / /mnt/oplus/op2 rw,nosuid,nodev,noatime master:19 - ext4 /dev/block/by-name/oplusreserve2 rw,seclabel ; 24251 24226 7:40 / /mnt/opex/com.oplus.AutoLayout@14001010 ro,nodev,noatime master:66 - ext4 /dev/block/loop5 ro,dirsync,seclabel ; 24252 24226 7:104 / /mnt/opex/com.oplus.CustCore@16000008 ro,nodev,noatime master:68 - ext4 /dev/block/loop13 ro,dirsync,seclabel ; 24253 24226 7:168 / /mnt/opex/com.oplus.NetworkAssistSys@16001066 ro,nodev,noatime master:70 - ext4 /dev/block/loop21 ro,dirsync,seclabel ; 24254 24226 7:240 / /mnt/opex/com.oplus.Omoji@16000011 ro,nodev,noatime master:73 - ext4 /dev/block/loop30 ro,dirsync,seclabel ; 24255 24226 7:344 / /mnt/opex/com.oplus.fancyIconLoader@1000000 ro,nodev,noatime master:75 - ext4 /dev/block/loop43 ro,dirsync,seclabel ; 24256 24226 7:360 / /mnt/opex/com.oplus.moduleservices@15000014 ro,nodev,noatime master:77 - ext4 /dev/block/loop45 ro,dirsync,seclabel ; 24257 24226 7:368 / /mnt/opex/com.oplus.odmf@16003008 ro,nodev,noatime master:80 - ext4 /dev/block/loop46 ro,dirsync,seclabel ; 24264 24263 0:94 / /system_ext/framework/oplusex/com.oplus.AutoLayout ro,noatime master:67 - overlay overlay ro,seclabel,lowerdir=/mnt/opex/com.oplus.AutoLayout@14001010/javalib:/system_ext/framework/oplusex/com.oplus.AutoLayout,override_creds=off ; 24265 24263 0:98 / /system_ext/framework/oplusex/com.oplus.CustCore ro,noatime master:69 - overlay overlay ro,seclabel,lowerdir=/mnt/opex/com.oplus.CustCore@16000008/javalib:/system_ext/framework/oplusex/com.oplus.CustCore,override_creds=off ; 24266 24263 0:102 / /system_ext/framework/oplusex/com.oplus.NetworkAssistSys ro,noatime master:71 - overlay overlay ro,seclabel,lowerdir=/mnt/opex/com.oplus.NetworkAssistSys@16001066/javalib:/system_ext/framework/oplusex/com.oplus.NetworkAssistSys,override_creds=off ;     <<MARK
 proc.self.status=TracerPid:	0 ; NoNewPrivs:	0 ; Seccomp:	2 ; Seccomp_filters:	1 ; Cpus_allowed_list:	0-7 ; 
 camera.ids=0,1
-camera.capture.0=ERR java.lang.SecurityException: validateClientPermissionsLocked:1834: Caller "dev.probe.env" (PID 25731, UID 10447) cannot open camera "0" without camera permission
-camera.capture.1=ERR java.lang.SecurityException: validateClientPermissionsLocked:1834: Caller "dev.probe.env" (PID 25731, UID 10447) cannot open camera "1" without camera permission
+camera.capture.0=ERR java.lang.SecurityException: validateClientPermissionsLocked:1834: Caller "dev.probe.env" (PID 17129, UID 10448) cannot open camera "0" without camera permission
+camera.capture.1=ERR java.lang.SecurityException: validateClientPermissionsLocked:1834: Caller "dev.probe.env" (PID 17129, UID 10448) cannot open camera "1" without camera permission
 features.hw=oppo.back.touch.fingerprint.sensor android.hardware.fingerprint android.hardware.bluetooth android.hardware.camera.autofocus android.hardware.camera.concurrent oppo.hardware.fingerprint.optical.support android.hardware.camera.flash android.hardware.camera.front android.hardware.nfc android.hardware.bluetooth_le oplus.hardware.fingerprint.unlock_without_icon.support android.hardware.camera android.hardware.camera.capability.manual_post_processing android.hardware.camera.any android.hardware.camera.capability.raw android.hardware.camera.capability.manual_sensor android.hardware.camera.level.full android.hardware.nfc.hcef android.hardware.nfc.uicc android.hardware.nfc.any android.hardware.nfc.ese android.hardware.nfc.hce     <<MARK
-bt=ERR java.lang.SecurityException: Need android.permission.BLUETOOTH_CONNECT permission for android.content.AttributionSource@db843903: getName
-battery=level=64 plugged=2 status=2 volt=3841 temp=270 tech=8
+bt=ERR java.lang.SecurityException: Need android.permission.BLUETOOTH_CONNECT permission for android.content.AttributionSource@95b991c9: getName
+battery=level=64 plugged=2 status=2 volt=3836 temp=268 tech=8
 auxv=16=efbfffff 3=588de40040 9=588de42000 26=22181 
 Build.BOOTLOADER=unknown
 prop.revision=0 hw= bootmode=reboot
