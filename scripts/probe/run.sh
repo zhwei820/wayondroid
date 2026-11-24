@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds the environment probe, runs it inside the running rootless guest as an ordinary app, prints its
-# report (lines tagged "<<MARK" name an emulator, Waydroid, LineageOS or the host) and uninstalls it.
+# report (lines tagged "<<MARK" name an emulator, Waydroid, LineageOS or the host), then waits until its close button
+# is tapped in the guest (it shows live sensor readings) and uninstalls it.
 # Runs on the dev machine: needs adb, the Android SDK (build-tools, android-33) and a JDK.
 set -e
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -47,6 +48,9 @@ data="files/instances/$id/rootless/data"
 # pm install PATH: PackageManager's SELinux check refuses a file the app (its host uid) wrote; stdin is fine
 gx "f=/data/local/tmp/probe.apk; cat \$f | pm install -r -S \$(stat -c %s \$f) >/dev/null; rm \$f
     for p in READ_PHONE_STATE ACCESS_FINE_LOCATION BLUETOOTH_CONNECT CAMERA ACTIVITY_RECOGNITION; do pm grant $pkg android.permission.\$p; done
-    rm -f /data/data/$pkg/files/report.txt; am start -W -n $pkg/.Main >/dev/null
+    rm -f /data/data/$pkg/files/report.txt /data/data/$pkg/files/closed; am start -W -n $pkg/.Main >/dev/null
     for i in \$(seq 1 150); do [ -s /data/data/$pkg/files/report.txt ] && break; sleep 1; done
-    cat /data/data/$pkg/files/report.txt; pm uninstall $pkg >/dev/null" | grep -v '^exit='
+    cat /data/data/$pkg/files/report.txt" | grep -v '^exit='
+echo "probe: showing live sensor readings in the guest; tap 关闭 there to finish" >&2
+until gx "{ [ -e /data/data/$pkg/files/closed ] || ! pidof $pkg >/dev/null; } && echo CLOSED" | grep -q CLOSED; do sleep 2; done
+gx "pm uninstall $pkg >/dev/null" >/dev/null

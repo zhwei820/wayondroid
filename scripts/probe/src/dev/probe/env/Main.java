@@ -5,6 +5,8 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
@@ -20,9 +22,16 @@ import android.opengl.EGLSurface;
 import android.opengl.GLES20;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Looper;
 import android.telephony.ServiceState;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -30,9 +39,12 @@ import java.io.FileReader;
 import java.lang.reflect.Method;
 import java.net.NetworkInterface;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.regex.Pattern;
 
-/** Reports what an ordinary app sees of the device, to files/report.txt. */
+/** Reports what an ordinary app sees of the device, to files/report.txt, then shows live sensor readings until
+ * its close button is tapped (files/closed). */
 public class Main extends Activity {
     static final Pattern MARK = Pattern.compile(
             "(?i)waydroid|lineage|goldfish|ranchu|qemu|cuttlefish|vsoc|gfxstream|virtio|tawc|vine|emulator|"
@@ -47,8 +59,102 @@ public class Main extends Activity {
         out.append('\n');
     }
 
+    static final class Reading {
+        int events;
+        float[] values;
+    }
+
+    /** Every non-one-shot sensor, from onCreate until closed */
+    final Map<Sensor, Reading> live = new LinkedHashMap<>();
+    final long liveSince = System.currentTimeMillis();
+    SensorManager liveManager;
+    HandlerThread liveThread;
+    final Handler ui = new Handler(Looper.getMainLooper());
+    TextView status, readings;
+    boolean closed;
+
+    final SensorEventListener liveListener = new SensorEventListener() {
+        @Override public void onSensorChanged(SensorEvent e) {
+            synchronized (live) {
+                Reading r = live.get(e.sensor);
+                if (r == null) return;
+                r.events++;
+                r.values = e.values.clone();
+            }
+        }
+        @Override public void onAccuracyChanged(Sensor s, int a) {}
+    };
+
+    static String values(float[] v) {
+        if (v == null) return "-";
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < Math.min(3, v.length); i++) b.append(i > 0 ? " " : "").append(String.format("%.3f", v[i]));
+        return b.toString();
+    }
+
+    void startLive() {
+        liveManager = getSystemService(SensorManager.class);
+        liveThread = new HandlerThread("live");
+        liveThread.start();
+        Handler h = new Handler(liveThread.getLooper());
+        for (Sensor s : liveManager.getSensorList(Sensor.TYPE_ALL)) {
+            if (s.getReportingMode() == Sensor.REPORTING_MODE_ONE_SHOT) continue;
+            synchronized (live) { live.put(s, new Reading()); }
+            liveManager.registerListener(liveListener, s, SensorManager.SENSOR_DELAY_UI, h);
+        }
+        ui.post(new Runnable() {
+            @Override public void run() {
+                if (closed) return;
+                StringBuilder b = new StringBuilder();
+                synchronized (live) {
+                    for (Map.Entry<Sensor, Reading> en : live.entrySet())
+                        b.append(en.getKey().getName()).append("\n    ").append(values(en.getValue().values))
+                                .append("   (").append(en.getValue().events).append(" 次)\n");
+                }
+                readings.setText(b);
+                ui.postDelayed(this, 250);
+            }
+        });
+    }
+
+    void close() {
+        if (closed) return;
+        closed = true;
+        if (liveManager != null) liveManager.unregisterListener(liveListener);
+        if (liveThread != null) liveThread.quitSafely();
+        try {
+            new File(getFilesDir(), "closed").createNewFile();
+        } catch (Exception ignored) {
+        }
+    }
+
+    @Override protected void onDestroy() {
+        close();
+        super.onDestroy();
+    }
+
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(32, 32, 32, 32);
+        status = new TextView(this);
+        status.setText("探测中…");
+        Button close = new Button(this);
+        close.setText("关闭");
+        close.setOnClickListener(v -> {
+            close();
+            finish();
+        });
+        readings = new TextView(this);
+        readings.setTypeface(android.graphics.Typeface.MONOSPACE);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(readings);
+        root.addView(status);
+        root.addView(close);
+        root.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        setContentView(root);
+        startLive();
         new Thread(() -> {
             String[] steps = {"build", "props", "telephony", "network", "sensors", "gl", "files", "hw", "packages"};
             for (String s : steps) {
@@ -62,7 +168,7 @@ public class Main extends Activity {
                 f.write(out.toString().getBytes());
             } catch (Exception ignored) {
             }
-            finish();
+            ui.post(() -> status.setText("报告已写入。看完读数后点「关闭」结束。"));
         }).start();
     }
 
@@ -177,6 +283,21 @@ public class Main extends Activity {
         for (Sensor s : sm.getSensorList(Sensor.TYPE_ALL))
             put("sensor." + s.getType() + (s.isWakeUpSensor() ? ".wakeup" : ""),
                 s.getName() + " | " + s.getVendor() + " | mode=" + s.getReportingMode());
+        /* what the live listeners got in their first seconds; on-change sensors only report changes */
+        long wait = liveSince + 6000 - System.currentTimeMillis();
+        if (wait > 0) {
+            try {
+                Thread.sleep(wait);
+            } catch (InterruptedException ignored) {
+            }
+        }
+        synchronized (live) {
+            for (Map.Entry<Sensor, Reading> en : live.entrySet()) {
+                Sensor s = en.getKey();
+                put("sensor.read." + s.getType() + (s.isWakeUpSensor() ? ".wakeup" : ""),
+                        s.getName() + " | events=" + en.getValue().events + " | " + values(en.getValue().values));
+            }
+        }
     }
 
     void gl() {
