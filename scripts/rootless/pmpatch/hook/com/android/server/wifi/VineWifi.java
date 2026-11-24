@@ -38,7 +38,6 @@ public final class VineWifi {
      */
     public static Object call(WifiThreadRunner runner, Supplier<Object> supplier, Object onTimeout) {
         Object result = runner.call(supplier, onTimeout);
-        android.util.Log.i("VineWifiDbg", "call result=" + (result == null ? "null" : result.getClass().getName()));
         if (result instanceof WifiInfo && ((WifiInfo) result).getSupplicantState() != SupplicantState.COMPLETED) {
             WifiInfo fake = VineWifiInfo.fake();
             if (fake != null) return fake;
@@ -59,9 +58,7 @@ public final class VineWifi {
      */
     public static android.net.Network syncGetCurrentNetwork(ClientMode mode) {
         android.net.Network network = mode.syncGetCurrentNetwork();
-        android.net.Network out = network != null ? network : VineWifiInfo.network();
-        android.util.Log.i("VineWifiDbg", "getCurrentNetwork real=" + network + " out=" + out);
-        return out;
+        return network != null ? network : VineWifiInfo.network();
     }
 
     /**

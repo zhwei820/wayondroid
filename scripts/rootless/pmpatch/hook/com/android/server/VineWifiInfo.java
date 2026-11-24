@@ -182,6 +182,8 @@ public final class VineWifiInfo {
     public static android.net.Network network() {
         Context context = systemContext();
         if (context == null || wlan0() == null) return null;
+        // As system_server, not as the binder caller WifiServiceImpl serves
+        long token = android.os.Binder.clearCallingIdentity();
         try {
             android.net.ConnectivityManager cm = context.getSystemService(android.net.ConnectivityManager.class);
             for (android.net.Network n : cm.getAllNetworks()) {
@@ -190,6 +192,8 @@ public final class VineWifiInfo {
             }
         } catch (Exception e) {
             // none
+        } finally {
+            android.os.Binder.restoreCallingIdentity(token);
         }
         return null;
     }
