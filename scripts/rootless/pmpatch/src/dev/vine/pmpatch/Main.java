@@ -41,7 +41,7 @@ import java.util.zip.ZipOutputStream;
  * calls (package queries and intent resolution) made through VineAppsHide.
  * service-connectivity.jar: the Ethernet network's legacy type name "WIFI",
  * as Wi-Fi's network agent names it, to go with the WIFI type the guest's
- * overlay gives it. service-wifi.jar: WifiServiceImpl's Wi-Fi state and
+ * overlay gives it, and its capabilities through VineEthernet. service-wifi.jar: WifiServiceImpl's Wi-Fi state and
  * connection info through VineWifi. A hook (hook/) goes in as one more
  * classesN.dex. Exits 2, writing nothing, when IN is none of these or is
  * already patched.
@@ -69,7 +69,8 @@ public final class Main {
 
     static final Patch[] PATCHES = {
         new Patch("Lcom/android/server/pm/ComputerEngine;", "VineAppsHide", Main::redirectFilter),
-        new Patch("Lcom/android/server/ethernet/EthernetNetworkFactory$NetworkInterfaceState;", null, Main::renameEthernet),
+        new Patch("Lcom/android/server/ethernet/EthernetNetworkFactory$NetworkInterfaceState;", "VineEthernet",
+                Main::patchEthernet),
         new Patch("Lcom/android/server/wifi/WifiServiceImpl;", "VineWifi", Main::redirectWifi),
     };
 
@@ -110,7 +111,7 @@ public final class Main {
                 }
             }
             if (patched == null) fail("nothing to patch");
-            if (edits == 0) fail(patch.hook == null ? "already patched" : "no call to redirect in " + patch.type);
+            if (edits == 0 || patch.hook != null && redirected.isEmpty()) fail("no call to redirect in " + patch.type);
             byte[] hook = patch.hook == null ? null : read(Main.class.getResourceAsStream("/" + patch.hook + ".dex"));
             if (hook != null) {
                 DexBackedDexFile hookDex = new DexBackedDexFile(Opcodes.forApi(33), hook);
@@ -185,6 +186,14 @@ public final class Main {
     /** Every call of AppsFilterSnapshot.shouldFilterApplication */
     static boolean redirectFilter(Method m, MutableMethodImplementation impl) {
         return redirect(impl, PATCHES[0], FILTER, NAME);
+    }
+
+    /** The legacy type name, and the network agent's capabilities through the hook */
+    static boolean patchEthernet(Method m, MutableMethodImplementation impl) {
+        boolean renamed = renameEthernet(m, impl);
+        boolean redirected = m.getName().equals("onIpLayerStarted") && redirect(impl, PATCHES[1],
+                "Lcom/android/server/ethernet/EthernetNetworkFactory$Dependencies;", "makeEthernetNetworkAgent");
+        return renamed || redirected;
     }
 
     /** In WifiServiceImpl's getWifiEnabledState and getConnectionInfo */

@@ -34,12 +34,14 @@ guava="$(fetch https://repo1.maven.org/maven2/com/google/guava/guava/31.1-androi
 mkdir -p "$work/hook" "$work/main" "$work/out"
 javac -nowarn --release 11 -cp "$jar" -d "$work/hook" \
     $(find "$here/hook" "$here/stubs" -name '*.java')
-# One dex per hook, <class>.dex; the stubs stand for the guest's own classes and stay out
-for src in $(find "$here/hook" -name '*.java'); do
+# One dex per hook, <class>.dex, each with its own copy of the shared VineWifiInfo (hooks go into
+# jars with separate class loaders); the stubs stand for the guest's own classes and stay out
+shared="$(find "$work/hook" -name 'VineWifiInfo*.class')"
+for src in $(find "$here/hook" -name 'Vine*.java' ! -name 'VineWifiInfo.java'); do
     h="$(basename "$src" .java)"
     mkdir -p "$work/dex-$h"
     "$bt/d8" --min-api 33 --lib "$jar" --classpath "$work/hook" --output "$work/dex-$h" \
-        $(find "$work/hook" -name "$h.class" -o -name "$h\$*.class")
+        $(find "$work/hook" -name "$h.class" -o -name "$h\$*.class") $shared
     cp "$work/dex-$h/classes.dex" "$work/out/$h.dex"
 done
 javac -nowarn --release 11 -cp "$dexlib2:$guava" -d "$work/main" $(find "$here/src" -name '*.java')
