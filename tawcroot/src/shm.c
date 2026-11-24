@@ -116,7 +116,7 @@ static struct tawcroot_shm_entry *find_free_locked(void)
  * because there's no host-fs path to re-open them by. */
 static long dup_to_reserved_inheritable(int fd)
 {
-	long r = tawc_fcntl(fd, F_DUPFD, TAWCROOT_RESERVED_FD_BASE);
+	long r = tawcroot_fd_dup_internal(fd, 0);
 	if (r < 0) return r;
 	tawc_close(fd);
 	return r;

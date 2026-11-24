@@ -93,10 +93,18 @@ void tawcroot_fd_forget_reserved(int fd)
 	}
 }
 
+long tawcroot_fd_dup_internal(int fd, int cloexec)
+{
+	const int op = cloexec ? F_DUPFD_CLOEXEC : F_DUPFD;
+	long r = tawc_fcntl(fd, op, TAWCROOT_INTERNAL_FD_BASE);
+	/* EINVAL: the floor is past RLIMIT_NOFILE */
+	return r == TAWC_EINVAL ? tawc_fcntl(fd, op, TAWCROOT_RESERVED_FD_BASE) : r;
+}
+
 long tawcroot_fd_reserve(int fd)
 {
 	if (fd < 0) return TAWC_EBADF;
-	long r = tawc_fcntl(fd, F_DUPFD_CLOEXEC, TAWCROOT_RESERVED_FD_BASE);
+	long r = tawcroot_fd_dup_internal(fd, 1);
 	if (r < 0) return r;
 	/* Table full: an unrecorded high fd would be invisible to
 	 * tawcroot_fd_is_reserved — i.e. not actually protected from the

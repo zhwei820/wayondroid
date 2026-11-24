@@ -207,7 +207,7 @@ test(prod_fork_closefrom_then_execve_in_child)
 }
 
 /* Same as prod_fork_then_execve_in_child but with bind mounts in
- * play. Validates that bind src_fds (>= RESERVED_FD_BASE+1) survive
+ * play. Validates that bind src_fds (>= INTERNAL_FD_BASE+1) survive
  * the fork-child's execve trap and re-export through bind.src[256]
  * — the exec_handler.c:104 "gpgme fork-child closefrom()" comment's
  * regression surface, plus the AT_EXECFN path-canonicalization fix

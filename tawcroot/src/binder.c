@@ -155,7 +155,7 @@ static void owner_setup(void)
 /* Move fd to a reserved high slot; closes the original. */
 static long reserve(long fd)
 {
-	long hi = TAWC_RAW(TAWC_SYS_fcntl, fd, F_DUPFD_CLOEXEC_, TAWCROOT_RESERVED_FD_BASE, 0, 0, 0);
+	long hi = tawcroot_fd_dup_internal((int)fd, 1);
 	tawc_close((int)fd);
 	if (hi < 0) return hi;
 	long rv = tawcroot_fd_record_reserved((int)hi);

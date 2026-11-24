@@ -43,6 +43,13 @@
 
 #define TAWCROOT_RESERVED_FD_BASE 1000
 
+/* Where tawcroot's own (recorded) fds go: past FD_SETSIZE, leaving
+ * [TAWCROOT_RESERVED_FD_BASE, 1024) to the fds the guest itself holds
+ * there (its binder, netlink, cgroup and mounts fds, placed at the base so
+ * their syscalls trap), which a select() caller such as mdnsd can then
+ * FD_SET. Still above the base, so the BPF fast paths cover them. */
+#define TAWCROOT_INTERNAL_FD_BASE 1024
+
 /* Cap on simultaneously reserved fds: rootfs, binds, linkstore, socket
  * parents, shm, and one socket per binder-using thread (binder.c). A
  * busy system_server has 160+ such threads and 245 reserved fds; at
@@ -93,8 +100,8 @@ static inline int tawcroot_fd_is_reserved(int fd)
 	return 0;
 }
 
-/* Move `fd` to the next free slot at or above TAWCROOT_RESERVED_FD_BASE
- * via `fcntl(F_DUPFD_CLOEXEC, base)` and close the original. Returns
+/* Move `fd` to the next free slot at or above TAWCROOT_INTERNAL_FD_BASE
+ * (tawcroot_fd_dup_internal) and close the original. Returns
  * the new fd on success, -errno on failure. -ENOSPC when the table is
  * full — failing closed, because an unrecorded high fd would be
  * invisible to tawcroot_fd_is_reserved (i.e. not actually protected);
@@ -103,6 +110,12 @@ static inline int tawcroot_fd_is_reserved(int fd)
  * registered handler); post-init callers (chroot, shm, lazy linkstore
  * fds) go through the raw stub, which the filter allowlists. */
 long tawcroot_fd_reserve(int fd);
+
+/* fcntl(F_DUPFD[_CLOEXEC]) of `fd` at TAWCROOT_INTERNAL_FD_BASE, or at
+ * TAWCROOT_RESERVED_FD_BASE where RLIMIT_NOFILE does not reach it. The
+ * new fd, or -errno; `fd` stays open, nothing is recorded. Raw syscalls
+ * only (binder.c places its per-thread sockets from the handler). */
+long tawcroot_fd_dup_internal(int fd, int cloexec);
 
 /* Record `fd` — which must already be at or above the base — in the
  * reserved table. Returns 0, or -ENOSPC when every slot is live.

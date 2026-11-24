@@ -37,7 +37,7 @@
  *
  * Note: close_range is trapped by tawcroot and emulated, so neither an
  * old kernel nor an old Android policy matters here. We also try plain
- * close() of a few well-known reserved fd numbers (1000..1003) to
+ * close() of a few well-known reserved fd numbers (1024..1027) to
  * exercise the BPF close fast-path.
  */
 
@@ -78,7 +78,7 @@ _start:
 	jmp     .Lexit
 
 .Lchild:
-	/* close(1000), close(1001), close(1002), close(1003) — exercise
+	/* close(1024), close(1025), close(1026), close(1027) — exercise
 	 * the BPF close-fastpath + handle_close lie-success on reserved
 	 * fds. We don't check return values; we only care that the
 	 * subsequent execve succeeds. (handle_close returns 0 for
@@ -86,20 +86,20 @@ _start:
 	 * if the slot wasn't reserved on this run.)
 	 *
 	 * NB: tawcroot reserves rootfs_fd + bind src_fds starting at
-	 * 1000 in order of registration. The single-bind test rootfs
-	 * with no -b flags has rootfs_fd = 1000 and that's it; with -b
-	 * flags the bind src_fds follow at 1001, 1002, …. We hit a
-	 * conservative range. */
-	mov     $1000, %rdi
+	 * 1024 (TAWCROOT_INTERNAL_FD_BASE) in order of registration. The
+	 * single-bind test rootfs with no -b flags has rootfs_fd = 1024
+	 * and that's it; with -b flags the bind src_fds follow at 1025,
+	 * 1026, …. We hit a conservative range. */
+	mov     $1024, %rdi
 	mov     $3, %rax            /* SYS_close */
 	syscall
-	mov     $1001, %rdi
+	mov     $1025, %rdi
 	mov     $3, %rax
 	syscall
-	mov     $1002, %rdi
+	mov     $1026, %rdi
 	mov     $3, %rax
 	syscall
-	mov     $1003, %rdi
+	mov     $1027, %rdi
 	mov     $3, %rax
 	syscall
 

@@ -45,18 +45,18 @@ _start:
 	b       .Lexit
 
 .Lchild:
-	/* close(1000..1003) — exercise BPF close fastpath + handle_close
+	/* close(1024..1027) — exercise BPF close fastpath + handle_close
 	 * lying success on reserved fds. */
-	mov     x0, #1000
+	mov     x0, #1024
 	mov     x8, #57
 	svc     #0
-	mov     x0, #1001
+	mov     x0, #1025
 	mov     x8, #57
 	svc     #0
-	mov     x0, #1002
+	mov     x0, #1026
 	mov     x8, #57
 	svc     #0
-	mov     x0, #1003
+	mov     x0, #1027
 	mov     x8, #57
 	svc     #0
 
