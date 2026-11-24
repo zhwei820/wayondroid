@@ -2,14 +2,17 @@
 # Builds the guest's static overlays into app/src/main/jniLibs/<abi>/ (APKs under library names;
 # rootless_prep installs them into /vendor/overlay). Gradle runs it before every build.
 #
-# libvine_telephony_overlay.so (VineTelephony.apk, next to the RIL): Waydroid's framework says
+# libvine_telephony_overlay.so (framework-res__auto_generated_rro_vendor.apk, next to the RIL): Waydroid's framework says
 # the device can neither call, text nor use mobile data, and Android 13's RIL then never talks
 # to the radio HAL. The overlay makes it all three, as the phone it poses as (Pixel 5) is.
 #
-# libvine_wifinet_overlay.so (VineWifiNet.apk): EthernetTracker takes tawcroot's wlan0 and
+# libvine_wifinet_overlay.so (ServiceConnectivityResources__auto_generated_rro_vendor.apk): EthernetTracker takes tawcroot's wlan0 and
 # reports it as Wi-Fi (transport 1), legacy type TYPE_WIFI included; the capabilities are
 # Ethernet's defaults, which the listed ones must repeat (NOT_VCN_MANAGED among them, or no
 # request matches and the guest has no default network).
+#
+# Package names follow the build system's for a vendor partition's RROs, as on a real device:
+# any app can list them.
 #
 # Needs the Android SDK (build-tools with aapt2 and apksigner, a platform's android.jar) and keytool.
 set -e
@@ -46,7 +49,7 @@ EOF
     echo "app/src/main/jniLibs/*/$1"
 }
 
-overlay libvine_telephony_overlay.so com.hexadecinull.vineos.overlay.telephony \
+overlay libvine_telephony_overlay.so android.auto_generated_rro_vendor__ \
     'android:targetPackage="android"' <<'EOF'
 <resources>
     <bool name="config_mobile_data_capable">true</bool>
@@ -57,7 +60,7 @@ EOF
 
 # Capabilities: NOT_METERED 11, INTERNET 12, NOT_RESTRICTED 13, TRUSTED 14, NOT_VPN 15,
 # NOT_ROAMING 18, NOT_CONGESTED 20, NOT_SUSPENDED 21, NOT_VCN_MANAGED 28
-overlay libvine_wifinet_overlay.so com.hexadecinull.vineos.overlay.wifinet \
+overlay libvine_wifinet_overlay.so com.android.connectivity.resources.auto_generated_rro_vendor__ \
     'android:targetPackage="com.android.connectivity.resources" android:targetName="ServiceConnectivityResourcesConfig"' <<'EOF'
 <resources>
     <string name="config_ethernet_iface_regex" translatable="false">wlan\\d</string>

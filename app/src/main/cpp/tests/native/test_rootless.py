@@ -377,7 +377,7 @@ def main():
           read(os.path.join(R, "vendor/lib64/android.hardware.radio.deprecated@1.0.so")) == "radio ril_deprecated\n",
           "RIL installed")
     check(read(os.path.join(R, "vendor/lib64/android.hardware.radio@1.0.so")) == "image radio 1.0\n", "radio@1.0 is the image's")
-    check(read(os.path.join(R, "vendor/overlay/VineTelephony.apk")) == "radio telephony_overlay\n", "telephony overlay installed")
+    check(read(os.path.join(R, "vendor/overlay/framework-res__auto_generated_rro_vendor.apk")) == "radio telephony_overlay\n", "telephony overlay installed")
     radio_rc = read(os.path.join(R, "vendor/etc/init/vine-radio.rc"))
     check(radio_rc.startswith("service vendor.ril-daemon /vendor/bin/hw/libgoldfish-rild -l /vendor/lib64/libcuttlefish-ril-2.so\n")
           and "user radio\n" in radio_rc and "setenv LD_PRELOAD /vendor/lib64/libvine_ril_shim.so\n" in radio_rc and
@@ -397,7 +397,7 @@ def main():
             ipc = f.read()
         check(ipc.startswith(b"\0\0\0\3\0\x0cipAssignment\0\x06STATIC\0\x0blinkAddress\0\x0e192.168.31.105\0\0\0\x18") and
               ipc.endswith(b"\0\x02id\0\x05wlan0\0\x03eos"), "ethernet ipconfig: " + repr(ipc))
-    check(read(os.path.join(R, "vendor/overlay/VineWifiNet.apk")) == "wifinet overlay\n", "wlan0 reported as Wi-Fi: overlay installed")
+    check(read(os.path.join(R, "vendor/overlay/ServiceConnectivityResources__auto_generated_rro_vendor.apk")) == "wifinet overlay\n", "wlan0 reported as Wi-Fi: overlay installed")
     check(os.readlink(os.path.join(R, "dev/binder")) == "binderfs/binder", "binder symlink")
     check(os.readlink(os.path.join(R, "apex/com.android.art")) == "/system/apex/com.android.art", "apex symlink")
     check(os.path.isdir(os.path.join(R, "dev/input")) and os.path.isfile(os.path.join(R, "dev/kmsg")), "dev dirs")

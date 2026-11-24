@@ -492,7 +492,7 @@ const std::pair<const char*, const char*> kRadioFiles[] = {
     {"libvine_ril_deprecated.so", "/lib64/android.hardware.radio.deprecated@1.0.so"},
     {"libvine_ril_shim.so", "/lib64/libvine_ril_shim.so"},
     // scripts/radio/build-overlay.sh: without it the framework never uses the RIL
-    {"libvine_telephony_overlay.so", "/overlay/VineTelephony.apk"},
+    {"libvine_telephony_overlay.so", "/overlay/framework-res__auto_generated_rro_vendor.apk"},
 };
 
 // *installed stays false without the prebuilts or the image's radio@1.0 and 1.1
@@ -985,9 +985,13 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // scripts/radio/build-overlay.sh: EthernetTracker takes tawcroot's wlan0
     // and reports it as Wi-Fi, which is how a phone without a SIM is online.
     // Without it wlan0 matches no interface regex and the guest is offline.
+    // Named as the build system names a vendor RRO: apps can read the path.
+    // VineTelephony.apk is the telephony overlay's name before.
+    unlink((R + "/vendor/overlay/VineTelephony.apk").c_str());
     if (is_regular_file(o.lib_dir + "/libvine_wifinet_overlay.so") &&
         (!mkdirs_or_fail(R + "/vendor/overlay", error) ||
-         !copy_mode(o.lib_dir + "/libvine_wifinet_overlay.so", R + "/vendor/overlay/VineWifiNet.apk", 0644, error)))
+         !copy_mode(o.lib_dir + "/libvine_wifinet_overlay.so",
+                    R + "/vendor/overlay/ServiceConnectivityResources__auto_generated_rro_vendor.apk", 0644, error)))
         return false;
 
     // A first boot has no app ops recorded, and LineageOS 20's SystemUI
