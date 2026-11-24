@@ -1241,6 +1241,12 @@ bool install_vendor_view(const std::string& R, const std::string& lib_dir, std::
             if (e->d_name[0] != '.') library_names(R + "/system/apex/" + e->d_name + "/lib64", &guest_libs);
         closedir(d);
     }
+    // The guest's own vendor libraries in subdirectories (egl, hw, dri, ...)
+    if (DIR* d = opendir((R + "/vendor/lib64").c_str())) {
+        while (dirent* e = readdir(d))
+            if (e->d_name[0] != '.' && e->d_type == DT_DIR) library_names(R + "/vendor/lib64/" + e->d_name, &guest_libs);
+        closedir(d);
+    }
     std::set<std::string> listed;
     size_t at = 0;
     while (at < manifest->size()) {
