@@ -211,6 +211,7 @@ def build_libs(lib):
     write_exec(os.path.join(lib, "libvine_sensors_ranchu.so"), "sensors ranchu\0Goldfish Light sensor\0x\n")
     for part in RADIO_LIBS:
         write_exec(os.path.join(lib, f"libvine_{part}.so"), f"radio {part}\n")
+    write_exec(os.path.join(lib, "libvine_rild.so"), "radio rild\0libcuttlefish-ril-2.so\0\n")
     write_exec(os.path.join(lib, "libvine_wifinet_overlay.so"), "wifinet overlay\n")
     write_exec(os.path.join(lib, "libvine_modem.so"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > modem.args\nexec sleep 1000\n")
     write_exec(os.path.join(lib, "fakebin/cmd"), FAKE_CMD)
@@ -385,6 +386,7 @@ def main():
           "setenv LD_PRELOAD /vendor/lib64/libsensorssc_ext.so\n" in sensors_rc and "rlimit" not in sensors_rc, "sensors rc")
     check("<version>2.1</version>" in read(os.path.join(R, "vendor/etc/vintf/manifest/android.hardware.sensors@2.1-multihal.xml")),
           "sensors VINTF")
+    check(read(os.path.join(R, "vendor/bin/hw/rild")) == "radio rild\0libril-qc-hal-qmi.so\0\0\0\n", "rild loads the RIL by its new name")
     check(os.access(os.path.join(R, "vendor/bin/hw/rild"), os.X_OK) and
           read(os.path.join(R, "vendor/lib64/libril-qc-hal-qmi.so")) == "radio ril_cuttlefish\n" and
           read(os.path.join(R, "vendor/lib64/hw/android.hardware.radio-library.compat.so")) == "radio ril_compat\n" and

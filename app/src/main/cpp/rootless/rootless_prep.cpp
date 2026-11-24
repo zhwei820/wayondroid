@@ -425,6 +425,21 @@ std::string zygote64_rc(const std::string& zygote64_32) {
 // The interface libraries are the image's own builds, not the
 // emulator's: Waydroid's libhidlbase adds a virtual to IBinder, and
 // stubs built against AOSP's call the wrong slot.
+// `so` with each whole NUL-terminated string `from` in it replaced by
+// `to`, no longer, NUL-padded: a prebuilt's .rodata, retouched in place
+template <size_t N>
+std::string replace_cstrings(std::string so, const std::pair<const char*, const char*> (&strings)[N]) {
+    for (const auto& [from, to] : strings) {
+        const std::string f = std::string(1, '\0') + from + '\0';
+        for (size_t at = so.find(f); at != std::string::npos; at = so.find(f, at + 1)) {
+            std::string t = to;
+            t.resize(strlen(from), '\0');
+            so.replace(at + 1, t.size(), t);
+        }
+    }
+    return so;
+}
+
 // The emulator's sensor names and vendor, in the ranchu HAL's .rodata,
 // as the Pixel 5's parts (a CPU-Z listing; unverified on a device). Each
 // is a whole NUL-terminated string, the new one no longer: apps list the
@@ -451,18 +466,6 @@ const std::pair<const char*, const char*> kSensorNames[] = {
     {"The Android Open Source Project", "STMicroelectronics"},
 };
 
-std::string with_sensor_names(std::string so) {
-    for (const auto& [from, to] : kSensorNames) {
-        const std::string f = std::string(1, '\0') + from + '\0';
-        for (size_t at = so.find(f); at != std::string::npos; at = so.find(f, at + 1)) {
-            std::string t = to;
-            t.resize(strlen(from), '\0');
-            so.replace(at + 1, t.size(), t);
-        }
-    }
-    return so;
-}
-
 bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::string* error) {
     const std::string multihal = lib_dir + "/libvine_sensors_multihal.so";
     const std::string ranchu = lib_dir + "/libvine_sensors_ranchu.so";
@@ -484,7 +487,7 @@ bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::
     const auto ranchu_so = read_file(ranchu);
     if (!ranchu_so) return fail(error, "could not read " + ranchu);
     return copy_mode(multihal, R + service, 0755, error) &&
-           write_mode(V + "/lib64/hw/sensors.ssc.so", with_sensor_names(*ranchu_so), 0644, error) &&
+           write_mode(V + "/lib64/hw/sensors.ssc.so", replace_cstrings(*ranchu_so, kSensorNames), 0644, error) &&
            copy_mode(wakelock, V + "/lib64/android.hardware.sensors@2.0-ScopedWakelock.so", 0644, error) &&
            copy_mode(lib_dir + "/libvine_sensors_shim.so", V + "/lib64/libsensorssc_ext.so", 0644, error) &&
            copy_mode(sys + "android.hardware.sensors@2.0.so", V + "/lib64/android.hardware.sensors@2.0.so", 0644, error) &&
@@ -520,6 +523,9 @@ bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::
 // emulator's but for radio@1.0 and 1.1, which the image has: unlike the
 // sensors HAL, the RIL serves the AIDL radio HALs and only uses its HIDL
 // types in-process.
+// rild dlopens its RIL by this name, whatever -l says
+const std::pair<const char*, const char*> kRildStrings[] = {{"libcuttlefish-ril-2.so", "libril-qc-hal-qmi.so"}};
+
 // Installed under a Qualcomm Pixel's names where apps could tell the
 // emulator's apart (they can stat these paths and read the rc)
 const std::pair<const char*, const char*> kRadioFiles[] = {
@@ -561,6 +567,9 @@ bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* i
         if (!copy_mode(lib_dir + "/" + lib, V + path, std::string(path).rfind("/bin/", 0) == 0 ? 0755 : 0644, error))
             return false;
     }
+    const auto rild = read_file(V + "/bin/hw/rild");
+    if (!rild || !write_mode(V + "/bin/hw/rild", replace_cstrings(*rild, kRildStrings), 0755, error))
+        return fail(error, "could not retouch rild");
     // Earlier names
     for (const char* old : {"/bin/hw/libgoldfish-rild", "/lib64/libcuttlefish-ril-2.so", "/lib64/libvine_ril_shim.so",
                             "/etc/init/vine-radio.rc", "/etc/vintf/manifest/vine-radio.xml",
