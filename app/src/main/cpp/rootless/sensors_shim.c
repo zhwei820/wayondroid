@@ -267,6 +267,38 @@ static post_fn real_post(void)
  * it while the sensor is off, so the last one is kept here and posted from
  * activate(), which calls sendAdditionalInfoReport with the HAL's lock held
  * (flush() does too, after its flush-complete event: a repeat is harmless). */
+/* The sub-HAL polls, at the sampling rate, every active sensor that isn't
+ * on-change (MultihalSensors::activate), and the framework gives a one-shot
+ * sensor no rate: significant motion would spin it. HalProxy takes the
+ * sensor list (with its one-shot flags) when it loads the sub-HAL, before
+ * initialize() turns the host's sensors on; after that the sub-HAL's own
+ * lookups see an on-change sensor. */
+#define GET_INFO _ZN8goldfish21getSensorInfoByHandleEi
+#define SET_ALL _ZN8goldfish15MultihalSensors17setAllQemuSensorsEb
+EXPORT const struct sensor_info* GET_INFO(int handle);
+EXPORT bool SET_ALL(void* self, bool enabled);
+static volatile bool listed;
+
+EXPORT bool SET_ALL(void* self, bool enabled)
+{
+    static bool (*real)(void*, bool);
+    if (!real) real = (bool (*)(void*, bool))subhal_sym(STR(SET_ALL), (void*)SET_ALL);
+    if (enabled) listed = true;
+    return real ? real(self, enabled) : false;
+}
+
+EXPORT const struct sensor_info* GET_INFO(int handle)
+{
+    static const struct sensor_info* (*real)(int);
+    if (!real) real = (const struct sensor_info* (*)(int))subhal_sym(STR(GET_INFO), (void*)GET_INFO);
+    const struct sensor_info* s = real ? real(handle) : NULL;
+    if (!s || !listed || handle != kHinge2 || s->type != kTypeSignificantMotion) return s;
+    static struct sensor_info on_change;
+    on_change = *s;
+    on_change.flags = (s->flags & kWakeUp) | kOnChange;
+    return &on_change;
+}
+
 static pthread_mutex_t last_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct event last[kSensors];
 static bool have_last[kSensors];

@@ -9,6 +9,8 @@
 #include <cstring>
 #include <cctype>
 #include <dirent.h>
+#include <fcntl.h>
+#include <set>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -925,10 +927,12 @@ bool install_gles_shim(const std::string& R, const std::string& lib_dir, std::st
 // build strings, MemTotal and the userdata size (a 128 GB model's).
 // An app's /proc/self/mounts on a Pixel 5 (Android 13, ext4 dynamic
 // partitions, f2fs userdata, FUSE storage), tawcroot's template for apps'
-// mounts and mountinfo, with each APEX the image has mounted twice (by name
-// and name@version) as apexd does. Block device numbers and sizes are made
-// up, unverified on a device; tawcroot adds the app's own profile mounts.
-std::string device_mounts(const std::string& R) {
+// mounts and mountinfo: fstab.sm7250's and fstab.persist's mount points,
+// and each APEX of TQ3A.230901.001.C2's system.img (name and version from
+// its apex_manifest.pb) mounted twice (by name and name@version) as apexd
+// does. Block device numbers and sizes are made up, unverified on a device;
+// tawcroot adds the app's own profile mounts.
+std::string device_mounts() {
     const std::string data_opts =
         "rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,"
         "inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,"
@@ -947,7 +951,6 @@ std::string device_mounts(const std::string& R) {
         "/dev/block/dm-7 /system_ext ext4 ro,seclabel,relatime 0 0\n"
         "/dev/block/dm-8 /vendor ext4 ro,seclabel,relatime 0 0\n"
         "/dev/block/dm-9 /product ext4 ro,seclabel,relatime 0 0\n"
-        "/dev/block/dm-10 /vendor_dlkm ext4 ro,seclabel,relatime 0 0\n"
         "tmpfs /apex " + tmp + " 0 0\n"
         "tmpfs /linkerconfig " + tmp + " 0 0\n"
         "none /dev/blkio cgroup rw,nosuid,nodev,noexec,relatime,blkio 0 0\n"
@@ -962,36 +965,59 @@ std::string device_mounts(const std::string& R) {
         "none /config configfs rw,nosuid,nodev,noexec,relatime 0 0\n"
         "binder /dev/binderfs binder rw,relatime,max=1048576,stats=global 0 0\n"
         "/dev/block/sda10 /metadata ext4 rw,seclabel,nosuid,nodev,noatime,discard,nodelalloc,commit=1,data=journal 0 0\n"
+        "/dev/block/sde41 /vendor/firmware_mnt vfat ro,context=u:object_r:firmware_file:s0,relatime,gid=1000,fmask=0337,"
+        "dmask=0227,codepage=437,iocharset=iso8859-1,shortname=lower,errors=remount-ro 0 0\n"
+        "/dev/block/sda2 /mnt/vendor/persist ext4 rw,seclabel,nosuid,nodev,noatime 0 0\n"
+        "fusectl /sys/fs/fuse/connections fusectl rw,relatime 0 0\n"
         "/dev/block/dm-38 /data f2fs " + data_opts +
         "tmpfs /data_mirror " + tmp + ",gid=1000 0 0\n";
     for (const char* d : {"/data_mirror/data_ce/null", "/data_mirror/data_de/null", "/data_mirror/misc_ce/null",
                           "/data_mirror/misc_de/null", "/data_mirror/cur_profiles", "/data_mirror/ref_profiles",
                           "/data_mirror/data_ce/null/0", "/data/user/0"})
         m += std::string("/dev/block/dm-38 ") + d + " f2fs " + data_opts;
-    std::vector<std::string> apexes;
-    if (DIR* d = opendir((R + "/system/apex").c_str())) {
-        while (dirent* e = readdir(d)) {
-            const std::string n = e->d_name;
-            // vendor API 30: the VNDK snapshots of older vendors aren't activated
-            if (n[0] == '.' || n.find('.') == std::string::npos || n == "com.android.vndk.v28" || n == "com.android.vndk.v29")
-                continue;
-            apexes.push_back(n);
-        }
-        closedir(d);
-    }
-    std::sort(apexes.begin(), apexes.end());
-    int dm = 11;
-    for (const std::string& n : apexes) {
-        uint32_t h = 2166136261u;
-        for (unsigned char c : n) h = (h ^ c) * 16777619u;
-        // Mainline modules' version form: 33 for T, a train, then build digits
-        const std::string version = "33" + std::to_string(1000 + h % 9000) + "000";
+    static const std::pair<const char*, const char*> kApexes[] = {
+        {"com.android.apex.cts.shim", "1"},
+        {"com.android.i18n", "1"},
+        {"com.android.runtime", "1"},
+        {"com.android.vndk.v33", "1"},
+        {"com.android.adbd", "331314022"},
+        {"com.android.adservices", "331418080"},
+        {"com.android.appsearch", "331311000"},
+        {"com.android.art", "331413030"},
+        {"com.android.btservices", "331716000"},
+        {"com.android.cellbroadcast", "331411000"},
+        {"com.android.conscrypt", "331411000"},
+        {"com.android.extservices", "331412000"},
+        {"com.android.ipsec", "331310000"},
+        {"com.android.media", "331410000"},
+        {"com.android.media.swcodec", "331410000"},
+        {"com.android.mediaprovider", "331412040"},
+        {"com.android.neuralnetworks", "331310000"},
+        {"com.android.ondevicepersonalization", "330442000"},
+        {"com.android.os.statsd", "331311000"},
+        {"com.android.permission", "331411000"},
+        {"com.android.resolv", "331314010"},
+        {"com.android.scheduling", "331111000"},
+        {"com.android.sdkext", "331410000"},
+        {"com.android.tethering", "331412110"},
+        {"com.android.tzdata", "331314010"},
+        {"com.android.uwb", "331410010"},
+        {"com.android.wifi", "331414000"},
+        {"com.google.mainline.primary.libs", "331434000"},
+    };
+    int dm = 10;
+    for (const auto& [name, version] : kApexes) {
         const std::string dev = "/dev/block/dm-" + std::to_string(dm++);
-        m += dev + " /apex/" + n + "@" + version + " ext4 ro,dirsync,seclabel,nodev,noatime 0 0\n";
-        m += dev + " /apex/" + n + " ext4 ro,dirsync,seclabel,nodev,noatime 0 0\n";
+        m += dev + " /apex/" + name + "@" + version + " ext4 ro,dirsync,seclabel,nodev,noatime 0 0\n";
+        m += dev + " /apex/" + name + " ext4 ro,dirsync,seclabel,nodev,noatime 0 0\n";
     }
+    // /storage is the app's user's /mnt/user dir; zygote binds Android/data
+    // and obb past FUSE to the lower filesystem
     m += "/dev/fuse /mnt/user/0/emulated fuse rw,lazytime,nosuid,nodev,noexec,noatime,user_id=0,group_id=0,allow_other 0 0\n"
+         "tmpfs /storage " + tmp + ",gid=1000 0 0\n"
          "/dev/fuse /storage/emulated fuse rw,lazytime,nosuid,nodev,noexec,noatime,user_id=0,group_id=0,allow_other 0 0\n";
+    for (const char* d : {"/storage/emulated/0/Android/data", "/storage/emulated/0/Android/obb"})
+        m += std::string("/dev/block/dm-38 ") + d + " f2fs " + data_opts;
     return m;
 }
 
@@ -1052,7 +1078,7 @@ bool write_device_view(const std::string& R, const std::string& store, std::stri
            // apps open them but don't list them. /dev itself apps can't list.
            write_mode(D + "/unlisted", "/dev/socket/gralloc\n/dev/socket/kgsl-0\n", 0644, error) &&
            write_mode(D + "/unlistable", "/dev\n", 0644, error) &&
-           write_mode(D + "/mounts", device_mounts(R), 0644, error) &&
+           write_mode(D + "/mounts", device_mounts(), 0644, error) &&
            // 110.5 GiB: Android reports the device's storage as the power of two above, 128 GB
            write_mode(D + "/data-bytes", "118648471552\n", 0644, error);
 }
@@ -1128,6 +1154,114 @@ const char* const kForeignApps[] = {
 bool remove_foreign_apps(const std::string& R, std::string* error) {
     for (const char* app : kForeignApps) {
         if (!remove_if_exists(R + app, error)) return false;
+    }
+    return true;
+}
+
+// A Pixel 5's /vendor as apps list it (scripts/rootless/stage-vendor-view.py
+// stages its names): placeholders where the guest lacks a name, sparse
+// zeros or commented-out init scripts, and the guest's own names in those
+// directories added to `hidden` (apps see them as absent). Never made: names
+// a lookup would take over the guest's own (hw_get_module's variants, HIDL
+// passthrough's -impl prefixes, prep's checks below), and lib64/egl.
+// lib64 and lib only gain names: apps load libraries from there.
+std::string base64_decode(const std::string& in) {
+    std::string out;
+    uint32_t acc = 0;
+    int bits = 0;
+    for (char c : in) {
+        int v = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26 : c >= '0' && c <= '9' ? c - '0' + 52
+                : c == '+' ? 62 : c == '/' ? 63 : -1;
+        if (v < 0) continue;
+        acc = acc << 6 | static_cast<uint32_t>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out += static_cast<char>((acc >> bits) & 0xff);
+        }
+    }
+    return out;
+}
+
+bool vendor_view_skips(const std::string& path) {
+    static const char* const kExact[] = {
+        "/vendor/lib64/egl",
+        "/vendor/lib64/hw/sensors.redfin.so",
+        "/vendor/lib64/hw/camera.lito.so",
+        "/vendor/lib64/hw/bootctrl.lito.so",
+        "/vendor/lib64/hw/lights.lito.so",
+        "/vendor/lib64/hw/sound_trigger.primary.lito.so",
+        "/vendor/bin/hw/android.hardware.media.omx@1.0-service",
+        "/vendor/lib64/libstagefrighthw.so",
+        "/vendor/lib64/libOmxCore.so",
+    };
+    for (const char* e : kExact)
+        if (path == e) return true;
+    for (const char* prefix : {"/vendor/lib64/hw/gralloc.", "/vendor/lib64/hw/android.hardware.graphics.mapper@",
+                               "/vendor/lib64/hw/android.hardware.gatekeeper@",
+                               "/vendor/lib64/hw/android.hardware.memtrack@"})
+        if (path.rfind(prefix, 0) == 0) return true;
+    return false;
+}
+
+bool install_vendor_view(const std::string& R, const std::string& lib_dir, std::string* hidden, std::string* error) {
+    const auto manifest = read_file(lib_dir + "/libvine_vendor_view.so");
+    if (!manifest) return true;
+    std::set<std::string> listed;
+    size_t at = 0;
+    while (at < manifest->size()) {
+        size_t end = manifest->find('\n', at);
+        if (end == std::string::npos) end = manifest->size();
+        const std::string line = manifest->substr(at, end - at);
+        at = end + 1;
+        if (line.size() < 3 || line[1] != ' ') continue;
+        const char kind = line[0];
+        size_t sp = line.find(' ', 2);
+        const std::string path = line.substr(2, sp == std::string::npos ? std::string::npos : sp - 2);
+        if (path.rfind("/vendor/", 0) != 0 || path.find("..") != std::string::npos) continue;
+        listed.insert(path);
+        if (vendor_view_skips(path)) continue;
+        const std::string full = R + path;
+        struct stat st {};
+        if (lstat(full.c_str(), &st) == 0) continue;
+        if (kind == 'd') {
+            if (!mkdirs_or_fail(full, error)) return false;
+            continue;
+        }
+        const std::string rest = sp == std::string::npos ? "" : line.substr(sp + 1);
+        if (kind == 'f') {
+            unsigned long long size = 0;
+            unsigned mode = 0644;
+            if (sscanf(rest.c_str(), "%llu %o", &size, &mode) < 1) continue;
+            const int fd = open(full.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode & 0777);
+            if (fd < 0) return fail_errno(error, "create " + full);
+            const bool ok = ftruncate(fd, static_cast<off_t>(size)) == 0;
+            close(fd);
+            if (!ok) return fail_errno(error, "truncate " + full);
+        } else if (kind == 't') {
+            const size_t sp2 = rest.find(' ');
+            if (sp2 == std::string::npos) continue;
+            const unsigned mode = static_cast<unsigned>(strtoul(rest.substr(0, sp2).c_str(), nullptr, 8));
+            if (!write_mode(full, base64_decode(rest.substr(sp2 + 1)), mode & 0777, error)) return false;
+        }
+    }
+    if (listed.empty()) return true;
+    // The guest's own names apps would see in a Pixel 5's place
+    static const char* const kAppsLoad[] = {"android.hardware.graphics.mapper@2.0-impl-2.1.so", "gralloc.default.so",
+                                            "gralloc.default_real.so", "gralloc.redfin.so", "vulkan.adreno.so"};
+    for (const char* dir : {"/vendor", "/vendor/etc/init", "/vendor/etc/permissions", "/vendor/etc/vintf/manifest",
+                            "/vendor/bin/hw", "/vendor/lib64/hw"}) {
+        DIR* d = opendir((R + dir).c_str());
+        if (!d) continue;
+        while (dirent* e = readdir(d)) {
+            const std::string name = e->d_name;
+            if (name == "." || name == ".." || listed.count(std::string(dir) + "/" + name)) continue;
+            if (std::string(dir) == "/vendor/lib64/hw" &&
+                std::any_of(std::begin(kAppsLoad), std::end(kAppsLoad), [&](const char* k) { return name == k; }))
+                continue;
+            *hidden += std::string(dir) + "/" + name + "\n";
+        }
+        closedir(d);
     }
     return true;
 }
@@ -1718,6 +1852,16 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
              !write_mode(vold_rc, with_service_option(*text, "vold", "setenv LD_PRELOAD /system/lib64/libvine_vold_shim.so"), 0644, error)))
             return false;
     }
+    // A Pixel 5's two display modes over the hwcomposer's one
+    const std::string composer_rc = R + "/vendor/etc/init/android.hardware.graphics.composer@2.1-service.rc";
+    if (const auto text = read_file(composer_rc); text && is_regular_file(o.lib_dir + "/libvine_hwc_shim.so")) {
+        if (!copy_mode(o.lib_dir + "/libvine_hwc_shim.so", R + "/vendor/lib64/libhwcomposer_ext.so", 0644, error) ||
+            (text->find("libhwcomposer_ext") == std::string::npos &&
+             !write_mode(composer_rc,
+                         with_service_option(*text, "vendor.hwcomposer-2-1", "setenv LD_PRELOAD /vendor/lib64/libhwcomposer_ext.so"),
+                         0644, error)))
+            return false;
+    }
     // The padded gralloc takes gralloc.default's place (the hwcomposer and
     // Mesa tell gralloc kinds apart by ro.hardware.gralloc) and loads it
     // under another name
@@ -1799,6 +1943,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!mkdirs_or_fail(l.work + "/power_supply", error) || chmod((l.work + "/power_supply").c_str(), 0755) != 0)
         return fail_errno(error, "chmod power_supply");
     if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) ||
+        (!id.empty() && !install_vendor_view(R, o.lib_dir, &extra_hidden, error)) ||
         !write_mode(l.store + "/app-hidden", app_hidden_list(R) + extra_hidden, 0644, error) ||
         !std::all_of(std::begin(kPatchedJars), std::end(kPatchedJars),
                      [&](const char* jar) { return patch_guest_jar(l, o.lib_dir, jar, error); }))

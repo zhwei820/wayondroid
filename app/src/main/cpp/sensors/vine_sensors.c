@@ -68,8 +68,7 @@ static const struct map kMap[] = {
     {10, ASENSOR_TYPE_GYROSCOPE_UNCALIBRATED, "gyroscope-uncalibrated", "gyroscope-uncalibrated", 3},
     {11, ASENSOR_TYPE_STEP_COUNTER, "hinge-angle0", "hinge-angle0", 1},
     {12, ASENSOR_TYPE_STEP_DETECTOR, "hinge-angle1", "hinge-angle1", 1},
-    /* Not 13 as significant motion: the sub-HAL polls a one-shot sensor
-     * with no rate in a tight loop */
+    {13, ASENSOR_TYPE_SIGNIFICANT_MOTION, "hinge-angle2", "hinge-angle2", 1},
     {17, ASENSOR_TYPE_ACCELEROMETER_UNCALIBRATED, "acceleration-uncalibrated", "acceleration-uncalibrated", 3},
 };
 #define NMAP (sizeof kMap / sizeof kMap[0])
