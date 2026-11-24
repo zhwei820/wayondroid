@@ -1,10 +1,13 @@
-/* `--fake-net`: an emulated loopback + eth0 for init sessions (netemu.c). */
+/* `--fake-net`: an emulated loopback + one link for init sessions (netemu.c). */
 #pragma once
 #include <ucontext.h>
 #include "dispatch.h"
 
-/* The fake eth0's index; lo is 1. */
+/* The fake link's index (lo is 1) and name: a phone's Wi-Fi interface, as
+ * the guest poses as a phone on Wi-Fi (rootless_prep has Android report it
+ * so). Its sysfs entries in netemu.c spell the name out too. */
 #define TAWCROOT_NETEMU_ETH_INDEX 2
+#define TAWCROOT_NETEMU_LINK "wlan0"
 
 /* After --init: reset the link table, populate the fake /sys/class/net
  * and /proc/sys/net and bind them, and stack the traps netemu needs. */

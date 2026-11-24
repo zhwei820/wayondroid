@@ -204,6 +204,7 @@ def build_libs(lib):
         write_exec(os.path.join(lib, f"libvine_sensors_{part}.so"), f"sensors {part}\n")
     for part in RADIO_LIBS:
         write_exec(os.path.join(lib, f"libvine_{part}.so"), f"radio {part}\n")
+    write_exec(os.path.join(lib, "libvine_wifinet_overlay.so"), "wifinet overlay\n")
     write_exec(os.path.join(lib, "libvine_modem.so"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > modem.args\nexec sleep 1000\n")
     write_exec(os.path.join(lib, "fakebin/cmd"), FAKE_CMD)
     write_exec(os.path.join(lib, "fakebin/input"), FAKE_INPUT)
@@ -394,8 +395,9 @@ def main():
     for d in ("data/misc/ethernet", "data/misc/apexdata/com.android.tethering/misc/ethernet"):
         with open(os.path.join(W, d, "ipconfig.txt"), "rb") as f:
             ipc = f.read()
-        check(ipc.startswith(b"\0\0\0\3\0\x0cipAssignment\0\x06STATIC\0\x0blinkAddress\0\x0910.0.2.15\0\0\0\x18") and
-              ipc.endswith(b"\0\x02id\0\x04eth0\0\x03eos"), "ethernet ipconfig: " + repr(ipc))
+        check(ipc.startswith(b"\0\0\0\3\0\x0cipAssignment\0\x06STATIC\0\x0blinkAddress\0\x0e192.168.31.105\0\0\0\x18") and
+              ipc.endswith(b"\0\x02id\0\x05wlan0\0\x03eos"), "ethernet ipconfig: " + repr(ipc))
+    check(read(os.path.join(R, "vendor/overlay/VineWifiNet.apk")) == "wifinet overlay\n", "wlan0 reported as Wi-Fi: overlay installed")
     check(os.readlink(os.path.join(R, "dev/binder")) == "binderfs/binder", "binder symlink")
     check(os.readlink(os.path.join(R, "apex/com.android.art")) == "/system/apex/com.android.art", "apex symlink")
     check(os.path.isdir(os.path.join(R, "dev/input")) and os.path.isfile(os.path.join(R, "dev/kmsg")), "dev dirs")

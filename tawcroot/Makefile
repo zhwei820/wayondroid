@@ -353,7 +353,7 @@ $(OUT)/programs/static_net_check: $(SRC_TS)/integration/programs/static_net_chec
 	$(CC) -O2 -static -Wl,--build-id=none $< -o $@
 
 # static_fakenet_check: static C (libc.a) — `--init --fake-net` lo +
-# eth0 emulation. See the source for exit codes.
+# wlan0 emulation. See the source for exit codes.
 $(OUT)/programs/static_fakenet_check: $(SRC_TS)/integration/programs/static_fakenet_check.c | $(OUT)
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -static -Wl,--build-id=none $< -o $@

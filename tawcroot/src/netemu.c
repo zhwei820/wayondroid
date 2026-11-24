@@ -1,4 +1,4 @@
-/* `--fake-net`: the guest sees a loopback and one wired link, eth0,
+/* `--fake-net`: the guest sees a loopback and one link, wlan0,
  * configured over rtnetlink and SIOC* ioctls as on a real kernel, while
  * its traffic goes out through the app's own sockets. An app can't read
  * or change the host's links (NETLINK_ROUTE binds and dumps are denied),
@@ -131,7 +131,7 @@ static void defaults(struct ne_state *s)
 	eth->mtu = 1500;
 	eth->type = NE_ARPHRD_ETHER;
 	memcpy(eth->mac, eth_mac, 6);
-	memcpy(eth->name, "eth0", 5);
+	memcpy(eth->name, TAWCROOT_NETEMU_LINK, sizeof TAWCROOT_NETEMU_LINK);
 	struct ne_addr *a = &s->addr[0];
 	a->index = 1; a->family = NE_INET; a->prefix = 8; a->scope = RT_SCOPE_HOST;
 	a->used = 1; a->flags = IFA_F_PERMANENT;
@@ -780,7 +780,7 @@ long tawcroot_netemu_socket(long domain, long type, long proto)
 	return hi;
 }
 
-/* bind() to the fake eth0 address: the host has no such address, so
+/* bind() to the fake link's address: the host has no such address, so
  * bind the wildcard instead. */
 static long bind_fake_addr(const tawcroot_syscall_args *a)
 {
@@ -931,7 +931,7 @@ long tawcroot_netemu_setsockopt(const tawcroot_syscall_args *a, ucontext_t *uc)
 				return TAWC_EFAULT;
 			int32_t index;
 			memcpy(&index, dev, 4);
-			if (opt == NE_SO_BINDTODEVICE ? tawc_streq(dev, "eth0")
+			if (opt == NE_SO_BINDTODEVICE ? tawc_streq(dev, TAWCROOT_NETEMU_LINK)
 						     : index == TAWCROOT_NETEMU_ETH_INDEX)
 				return 0;
 			long r = TAWC_RAW(TAWC_SYS_setsockopt, a->a, a->b, a->c, a->d, a->e, 0);
@@ -1163,7 +1163,7 @@ static const char *const sys_eth[] = {
 	"broadcast", "ff:ff:ff:ff:ff:ff", "mtu", "1500", "flags", "0x1003",
 	"operstate", "up", "carrier", "1", "type", "1", "addr_len", "6",
 	"tx_queue_len", "1000", "dev_id", "0x0", "dev_port", "0", "addr_assign_type", "3",
-	"speed", "1000", "duplex", "full", "uevent", "INTERFACE=eth0\nIFINDEX=2", 0
+	"uevent", "DEVTYPE=wlan\nINTERFACE=" TAWCROOT_NETEMU_LINK "\nIFINDEX=2", 0
 };
 static const char *const conf4[] = {
 	"forwarding", "0", "mc_forwarding", "0", "rp_filter", "0", "accept_redirects", "1",
@@ -1191,9 +1191,9 @@ static const char *const proc_top[] = {
 
 static long populate(int root)
 {
-	static const char *const ifs[] = { "all", "default", "lo", "eth0" };
+	static const char *const ifs[] = { "all", "default", "lo", TAWCROOT_NETEMU_LINK };
 	long e = put_list(root, "sys/lo", sys_lo);
-	if (!e) e = put_list(root, "sys/eth0", sys_eth);
+	if (!e) e = put_list(root, "sys/" TAWCROOT_NETEMU_LINK, sys_eth);
 	char dir[64];
 	for (int i = 0; !e && i < 4; ++i) {
 		static const char *const roots[] = { "proc/ipv4/conf/", "proc/ipv6/conf/",

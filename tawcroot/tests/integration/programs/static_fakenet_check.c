@@ -1,4 +1,4 @@
-/* `tawcroot --init --fake-net`: the emulated lo + eth0 over rtnetlink,
+/* `tawcroot --init --fake-net`: the emulated lo + wlan0 over rtnetlink,
  * SIOC* ioctls, /sys/class/net and /proc/sys/net, as netd and IpClient
  * drive them; multicast changes reach a listener as kernel messages
  * with credentials, the state is shared with children, and glibc's
@@ -86,7 +86,7 @@ static const char *ifname(struct nlmsghdr *h)
 	return "";
 }
 
-/* Dump links: 1 if lo is index 1 and eth0 index 2, ending in DONE. */
+/* Dump links: 1 if lo is index 1 and wlan0 index 2, ending in DONE. */
 static int dump_links(int fd)
 {
 	struct rtgenmsg g = { AF_UNSPEC };
@@ -101,7 +101,7 @@ static int dump_links(int fd)
 			if (h->nlmsg_type != RTM_NEWLINK) return 0;
 			struct ifinfomsg *ifi = NLMSG_DATA(h);
 			if (!strcmp(ifname(h), "lo") && ifi->ifi_index == 1) lo = 1;
-			if (!strcmp(ifname(h), "eth0") && ifi->ifi_index == 2) eth = 1;
+			if (!strcmp(ifname(h), "wlan0") && ifi->ifi_index == 2) eth = 1;
 		}
 	}
 }
@@ -148,7 +148,7 @@ static int eth_addr(int fd, char *out)
 {
 	struct ifreq r;
 	memset(&r, 0, sizeof r);
-	strcpy(r.ifr_name, "eth0");
+	strcpy(r.ifr_name, "wlan0");
 	if (if_ioctl(fd, SIOCGIFADDR, &r)) return -1;
 	inet_ntop(AF_INET, &((struct sockaddr_in *)&r.ifr_addr)->sin_addr, out, 16);
 	return 0;
@@ -160,7 +160,7 @@ int main(void)
 	int lo = 0, eth = 0;
 	for (struct dirent *e; d && (e = readdir(d));) {
 		if (!strcmp(e->d_name, "lo")) lo = 1;
-		if (!strcmp(e->d_name, "eth0")) eth = 1;
+		if (!strcmp(e->d_name, "wlan0")) eth = 1;
 	}
 	if (!d || !lo || !eth) return 1;
 	closedir(d);
@@ -185,7 +185,7 @@ int main(void)
 	int inet = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 	struct ifreq r;
 	memset(&r, 0, sizeof r);
-	strcpy(r.ifr_name, "eth0");
+	strcpy(r.ifr_name, "wlan0");
 	if (inet < 0 || if_ioctl(inet, SIOCGIFINDEX, &r) || r.ifr_ifindex != 2) return 5;
 	if (if_ioctl(inet, SIOCGIFFLAGS, &r) || (r.ifr_flags & IFF_UP)) return 5;
 	r.ifr_flags |= IFF_UP;
@@ -206,7 +206,7 @@ int main(void)
 	int seen = 0;
 	if (getifaddrs(&all)) return 12;
 	for (x = all; x; x = x->ifa_next)
-		if (x->ifa_addr && x->ifa_addr->sa_family == AF_INET && !strcmp(x->ifa_name, "eth0") &&
+		if (x->ifa_addr && x->ifa_addr->sa_family == AF_INET && !strcmp(x->ifa_name, "wlan0") &&
 		    ((struct sockaddr_in *)x->ifa_addr)->sin_addr.s_addr == htonl(0x0a00020f))
 			seen = 1;
 	freeifaddrs(all);
@@ -217,15 +217,15 @@ int main(void)
 
 	int mark = 42;
 	if (setsockopt(inet, SOL_SOCKET, SO_MARK, &mark, sizeof mark)) return 14;
-	if (setsockopt(inet, SOL_SOCKET, SO_BINDTODEVICE, "eth0", 5)) return 15;
+	if (setsockopt(inet, SOL_SOCKET, SO_BINDTODEVICE, "wlan0", 5)) return 15;
 	struct sockaddr_in local = { .sin_family = AF_INET };
 	inet_pton(AF_INET, "10.0.2.15", &local.sin_addr);
 	if (bind(inet, (struct sockaddr *)&local, sizeof local)) return 16;
 
-	int f = open("/proc/sys/net/ipv6/conf/eth0/disable_ipv6", O_WRONLY | O_TRUNC);
+	int f = open("/proc/sys/net/ipv6/conf/wlan0/disable_ipv6", O_WRONLY | O_TRUNC);
 	if (f < 0 || write(f, "0\n", 2) != 2) return 17;
 	close(f);
-	f = open("/proc/sys/net/ipv6/conf/eth0/use_tempaddr", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	f = open("/proc/sys/net/ipv6/conf/wlan0/use_tempaddr", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (f < 0 || write(f, "2\n", 2) != 2) return 17;
 	close(f);
 
@@ -252,7 +252,7 @@ int main(void)
 	q.h.nlmsg_seq = seq++;
 	q.a.rta_type = IFLA_IFNAME;
 	q.a.rta_len = RTA_LENGTH(5);
-	strcpy(q.name, "eth0");
+	strcpy(q.name, "wlan0");
 	char buf[4096] __attribute__((aligned(4)));
 	if (write(nl, &q, sizeof q) != sizeof q) return 19;
 	ssize_t n = read(nl, buf, sizeof buf);

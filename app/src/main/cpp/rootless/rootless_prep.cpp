@@ -123,12 +123,12 @@ const char kCheckDisplay[] =
     "kill -9 $pid\n";
 
 // Network validation probes Google by default, unreachable from where
-// many phones are: eth0 stays PARTIAL_CONNECTIVITY, never VALIDATED, and
+// many phones are: wlan0 stays PARTIAL_CONNECTIVITY, never VALIDATED, and
 // DownloadManager's jobs (which need a validated network) wait forever.
 // Probe vendor generate_204 endpoints that answer from China instead.
 // NetworkMonitor reads the URLs once, when the network comes up, and keeps
 // them: write them as soon as SettingsProvider answers, seconds before
-// eth0's network exists (a new instance's first boot included). As root:
+// wlan0's network exists (a new instance's first boot included). As root:
 // `cmd settings` writes as com.android.shell, which uid 1000 fails to own.
 const char kCaptivePortalUrls[] =
     "#!/system/bin/sh\n"
@@ -279,8 +279,8 @@ void put_int(std::string& out, uint32_t v) {
 
 } // namespace
 
-// The fake eth0's static configuration, in IpConfigStore's format:
-// EthernetTracker brings eth0 up with it, no DHCP needed. The one DNS
+// The fake wlan0's static configuration, in IpConfigStore's format:
+// EthernetTracker brings wlan0 up with it, no DHCP needed. The one DNS
 // server is virtual: tawcroot sends its queries to the first address in
 // <store>/dns, which the app rewrites whenever the phone's network (or
 // VPN) changes. Android 13 has no way to change a static link's DNS at
@@ -302,7 +302,7 @@ std::string ethernet_ipconfig() {
     put_utf(out, "proxySettings");
     put_utf(out, "NONE");
     put_utf(out, "id");
-    put_utf(out, "eth0");
+    put_utf(out, "wlan0");
     put_utf(out, "eos");
     return out;
 }
@@ -965,7 +965,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     bool radio = false;
     if (!install_radio_hal(R, o.lib_dir, &radio, error)) return false;
     // Mobile data off by default: vine_modem fails data calls, and the
-    // RIL sets its data interface down when one ends, which may be eth0
+    // RIL sets its data interface down when one ends, which may be wlan0
     if (!write_mode(R + "/vendor/waydroid.prop",
                     waydroid_prop(o.dpi, o.gpu) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
         return false;
@@ -982,6 +982,13 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
+    // scripts/radio/build-overlay.sh: EthernetTracker takes tawcroot's wlan0
+    // and reports it as Wi-Fi, which is how a phone without a SIM is online.
+    // Without it wlan0 matches no interface regex and the guest is offline.
+    if (is_regular_file(o.lib_dir + "/libvine_wifinet_overlay.so") &&
+        (!mkdirs_or_fail(R + "/vendor/overlay", error) ||
+         !copy_mode(o.lib_dir + "/libvine_wifinet_overlay.so", R + "/vendor/overlay/VineWifiNet.apk", 0644, error)))
+        return false;
 
     // A first boot has no app ops recorded, and LineageOS 20's SystemUI
     // then crashes on getPackagesForOps() returning null. Seed one that

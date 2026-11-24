@@ -111,8 +111,9 @@ android {
         jniLibs {
             // libvine_helper.so is an executable that su starts, so it has to be extracted to disk instead of mapped from the APK
             useLegacyPackaging = true
-            // An APK (the guest's telephony overlay) under a library name, not an ELF to strip
+            // APKs (the guest's overlays) under library names, not ELFs to strip
             keepDebugSymbols += "**/libvine_telephony_overlay.so"
+            keepDebugSymbols += "**/libvine_wifinet_overlay.so"
         }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -203,3 +204,16 @@ for ((abi, scriptAbi) in listOf("arm64-v8a" to "aarch64", "x86_64" to "x86_64"))
     }
     tasks.named("preBuild") { dependsOn(buildTawcroot) }
 }
+
+// The guest's static overlays (scripts/radio/build-overlay.sh): without libvine_wifinet_overlay.so a rootless guest has no network
+val buildOverlays = tasks.register<Exec>("buildGuestOverlays") {
+    workingDir = rootProject.projectDir
+    doFirst { environment("ANDROID_HOME", androidComponents.sdkComponents.sdkDirectory.get().asFile.path) }
+    commandLine("scripts/radio/build-overlay.sh")
+    inputs.file(rootProject.file("scripts/radio/build-overlay.sh"))
+    for (abi in listOf("arm64-v8a", "x86_64")) {
+        outputs.file("$projectDir/src/main/jniLibs/$abi/libvine_telephony_overlay.so")
+        outputs.file("$projectDir/src/main/jniLibs/$abi/libvine_wifinet_overlay.so")
+    }
+}
+tasks.named("preBuild") { dependsOn(buildOverlays) }
