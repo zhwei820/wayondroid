@@ -530,7 +530,12 @@ bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* i
                     "    class main\n"
                     "    user radio\n"
                     "    group radio cache inet misc audio log readproc wakelock\n"
-                    "    setenv LD_PRELOAD /vendor/lib64/libvine_ril_shim.so\n",
+                    "    setenv LD_PRELOAD /vendor/lib64/libvine_ril_shim.so\n"
+                    // The Pixel 5's in place of reference-ril's. Unverified on
+                    // a device: the baseband is TQ1A.230105.001's (AT&T's
+                    // update notes), not TQ3A.230901.001's
+                    "    setenv VINE_RIL_IMPL \"Qualcomm RIL 1.0\"\n"
+                    "    setenv VINE_BASEBAND g7250-00220-221017-B-9183951\n",
                     0644, error) ||
         // A phone's: apps check for it before they read the SIM
         !write_mode(V + "/etc/permissions/vine-telephony.xml",

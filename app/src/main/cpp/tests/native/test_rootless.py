@@ -380,6 +380,7 @@ def main():
     radio_rc = read(os.path.join(R, "vendor/etc/init/vine-radio.rc"))
     check(radio_rc.startswith("service vendor.ril-daemon /vendor/bin/hw/libgoldfish-rild -l /vendor/lib64/libcuttlefish-ril-2.so\n")
           and "user radio\n" in radio_rc and "setenv LD_PRELOAD /vendor/lib64/libvine_ril_shim.so\n" in radio_rc and
+          "setenv VINE_RIL_IMPL \"Qualcomm RIL 1.0\"\n" in radio_rc and "setenv VINE_BASEBAND g7250-" in radio_rc and
           read(os.path.join(R, "vendor/lib64/libvine_ril_shim.so")) == "radio ril_shim\n", "RIL rc and shim: " + radio_rc)
     radio_vintf = read(os.path.join(R, "vendor/etc/vintf/manifest/vine-radio.xml"))
     check(radio_vintf.count("<hal format=\"aidl\">") == 7 and "<fqname>IRadioSim/slot1</fqname>" in radio_vintf and
