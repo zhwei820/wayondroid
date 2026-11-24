@@ -1,4 +1,5 @@
-/* `--fake-net`: the guest sees a loopback and one link, wlan0,
+/* `--fake-net`: the guest sees a loopback, one link, wlan0, and dummy0 (as
+ * a phone's kernel has: up, no addresses, no traffic),
  * configured over rtnetlink and SIOC* ioctls as on a real kernel, while
  * its traffic goes out through the app's own sockets. An app can't read
  * or change the host's links (NETLINK_ROUTE binds and dumps are denied),
@@ -60,6 +61,7 @@
 #define NE_IFF_UP 0x1
 #define NE_IFF_BROADCAST 0x2
 #define NE_IFF_LOOPBACK 0x8
+#define NE_IFF_NOARP 0x80
 #define NE_IFF_RUNNING 0x40
 #define NE_IFF_MULTICAST 0x1000
 #define NE_IFF_LOWER_UP 0x10000
@@ -71,8 +73,8 @@
 #define NE_OPER_DOWN 2
 #define NE_OPER_UP 6
 
-#define NE_MAGIC 0x4e455431u
-#define NE_LINKS 2
+#define NE_MAGIC 0x4e455432u
+#define NE_LINKS 3
 #define NE_ADDRS 32
 #define NE_SUBS 64
 #define NE_MAX_IOV 16
@@ -113,6 +115,9 @@ _Static_assert(sizeof(struct ne_ifreq) == 40, "struct ifreq is 40 bytes");
  * device so instances don't share it */
 static uint8_t eth_mac[6] = { 0xa6, 0x3c, 0x7e, 0x91, 0x5d, 0x28 };
 static char eth_address[18] = "a6:3c:7e:91:5d:28";
+/* dummy0's, random as the kernel makes it: derived from eth_mac by load_mac */
+static uint8_t dummy_mac[6] = { 0x5e, 0x91, 0x0c, 0x27, 0xb3, 0x4a };
+static char dummy_address[18] = "5e:91:0c:27:b3:4a";
 
 static int enabled(void)
 {
@@ -135,6 +140,13 @@ static void defaults(struct ne_state *s)
 	eth->type = NE_ARPHRD_ETHER;
 	memcpy(eth->mac, eth_mac, 6);
 	memcpy(eth->name, TAWCROOT_NETEMU_LINK, sizeof TAWCROOT_NETEMU_LINK);
+	struct ne_link *dummy = &s->link[2];
+	dummy->index = 3;
+	dummy->flags = NE_IFF_UP | NE_IFF_BROADCAST | NE_IFF_NOARP | NE_IFF_RUNNING | NE_IFF_LOWER_UP;
+	dummy->mtu = 1500;
+	dummy->type = NE_ARPHRD_ETHER;
+	memcpy(dummy->mac, dummy_mac, 6);
+	memcpy(dummy->name, "dummy0", 7);
 	struct ne_addr *a = &s->addr[0];
 	a->index = 1; a->family = NE_INET; a->prefix = 8; a->scope = RT_SCOPE_HOST;
 	a->used = 1; a->flags = IFA_F_PERMANENT;
@@ -191,8 +203,12 @@ static void load_mac(void)
 	if (n <= 0 || !tawcroot_netemu_parse_mac(text, n, eth_mac)) return;
 	static const char digits[] = "0123456789abcdef";
 	for (int i = 0; i < 6; i++) {
+		dummy_mac[i] = (uint8_t)(eth_mac[5 - i] * 167u + 0x3d * (unsigned)i);
+		if (!i) dummy_mac[i] = (uint8_t)((dummy_mac[i] & 0xfc) | 0x02);  /* unicast, locally administered */
 		eth_address[3 * i] = digits[eth_mac[i] >> 4];
 		eth_address[3 * i + 1] = digits[eth_mac[i] & 15];
+		dummy_address[3 * i] = digits[dummy_mac[i] >> 4];
+		dummy_address[3 * i + 1] = digits[dummy_mac[i] & 15];
 	}
 }
 
@@ -1209,6 +1225,13 @@ static const char *const sys_eth[] = {
 	"tx_queue_len", "1000", "dev_id", "0x0", "dev_port", "0", "addr_assign_type", "3",
 	"uevent", "DEVTYPE=wlan\nINTERFACE=" TAWCROOT_NETEMU_LINK "\nIFINDEX=2", 0
 };
+static const char *const sys_dummy[] = {
+	"ifindex", "3", "iflink", "3", "address", dummy_address,
+	"broadcast", "ff:ff:ff:ff:ff:ff", "mtu", "1500", "flags", "0x83",
+	"operstate", "unknown", "carrier", "1", "type", "1", "addr_len", "6",
+	"tx_queue_len", "1000", "dev_id", "0x0", "dev_port", "0", "addr_assign_type", "1",
+	"uevent", "INTERFACE=dummy0\nIFINDEX=3", 0
+};
 static const char *const conf4[] = {
 	"forwarding", "0", "mc_forwarding", "0", "rp_filter", "0", "accept_redirects", "1",
 	"send_redirects", "1", "accept_local", "0", "arp_ignore", "0", "arp_announce", "0",
@@ -1235,11 +1258,12 @@ static const char *const proc_top[] = {
 
 static long populate(int root)
 {
-	static const char *const ifs[] = { "all", "default", "lo", TAWCROOT_NETEMU_LINK };
+	static const char *const ifs[] = { "all", "default", "lo", TAWCROOT_NETEMU_LINK, "dummy0" };
 	long e = put_list(root, "sys/lo", sys_lo);
 	if (!e) e = put_list(root, "sys/" TAWCROOT_NETEMU_LINK, sys_eth);
+	if (!e) e = put_list(root, "sys/dummy0", sys_dummy);
 	char dir[64];
-	for (int i = 0; !e && i < 4; ++i) {
+	for (int i = 0; !e && i < 5; ++i) {
 		static const char *const roots[] = { "proc/ipv4/conf/", "proc/ipv6/conf/",
 						     "proc/ipv4/neigh/", "proc/ipv6/neigh/" };
 		for (int k = 0; !e && k < 4; ++k) {

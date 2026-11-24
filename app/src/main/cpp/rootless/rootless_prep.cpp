@@ -1669,6 +1669,11 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     for (const char* d : {"/dev/socket", "/dev/pts", "/dev/input", "/mnt/vendor", "/mnt/product", "/run/user/1000"}) {
         if (!mkdirs_or_fail(R + d, error)) return false;
     }
+    // What a Qualcomm phone's init makes there for its modem and location
+    // daemons (apps can list /dev/socket); nothing serves them here
+    if (!id.empty())
+        for (const char* d : {"/qmux_audio", "/qmux_bluetooth", "/qmux_gps", "/qmux_radio", "/location"})
+            if (!mkdirs_or_fail(R + "/dev/socket" + d, error)) return false;
     // vine_kumquat's sockets where apps' GPU drivers find them (/run, the
     // engine's, is hidden from apps): gfxstream-vk's default path
     // (kVulkanStrings) and gralloc_gpu.c's
