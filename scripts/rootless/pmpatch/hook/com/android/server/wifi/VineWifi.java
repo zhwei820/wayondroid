@@ -42,8 +42,8 @@ public final class VineWifi {
             if (fake != null) return fake;
         } else if (result instanceof List && ((List<?>) result).isEmpty() && VineWifiInfo.wlan0() != null) {
             return VineWifiInfo.scan();
-        } else if (Boolean.FALSE.equals(result) && VineWifiInfo.wlan0() != null) {
-            // startScan, refused for want of a radio
+        } else if ((result == null || result instanceof Boolean) && VineWifiInfo.wlan0() != null) {
+            // startScan, which without a radio fails or starts a scan that never ends
             VineWifiInfo.announceScan();
             return Boolean.TRUE;
         }
