@@ -4,15 +4,21 @@ import com.android.tools.smali.dexlib2.Opcode;
 import com.android.tools.smali.dexlib2.Opcodes;
 import com.android.tools.smali.dexlib2.builder.BuilderInstruction;
 import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation;
+import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction21c;
+import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction35c;
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction3rc;
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile;
 import com.android.tools.smali.dexlib2.iface.ClassDef;
 import com.android.tools.smali.dexlib2.iface.Method;
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction;
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction;
+import com.android.tools.smali.dexlib2.iface.instruction.formats.Instruction35c;
 import com.android.tools.smali.dexlib2.iface.instruction.formats.Instruction3rc;
 import com.android.tools.smali.dexlib2.iface.reference.MethodReference;
 import com.android.tools.smali.dexlib2.immutable.ImmutableClassDef;
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethod;
 import com.android.tools.smali.dexlib2.immutable.reference.ImmutableMethodReference;
+import com.android.tools.smali.dexlib2.immutable.reference.ImmutableStringReference;
 import com.android.tools.smali.dexlib2.writer.io.MemoryDataStore;
 import com.android.tools.smali.dexlib2.writer.pool.DexPool;
 
@@ -30,17 +36,46 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 /**
- * Main IN.jar OUT.jar: the guest's services.jar with ComputerEngine's
- * AppsFilterSnapshot.shouldFilterApplication calls (package queries and
- * intent resolution) made through VineAppsHide (hook/, which goes in as
- * one more classesN.dex). Exits 2, writing nothing, when IN has no such
- * call or already has the hook.
+ * Main IN.jar OUT.jar: one of the guest's jars patched, whichever it is.
+ * services.jar: ComputerEngine's AppsFilterSnapshot.shouldFilterApplication
+ * calls (package queries and intent resolution) made through VineAppsHide.
+ * service-connectivity.jar: the Ethernet network's legacy type name "WIFI",
+ * as Wi-Fi's network agent names it, to go with the WIFI type the guest's
+ * overlay gives it. service-wifi.jar: WifiServiceImpl's Wi-Fi state and
+ * connection info through VineWifi. A hook (hook/) goes in as one more
+ * classesN.dex. Exits 2, writing nothing, when IN is none of these or is
+ * already patched.
  */
 public final class Main {
-    static final String ENGINE = "Lcom/android/server/pm/ComputerEngine;";
     static final String FILTER = "Lcom/android/server/pm/AppsFilterSnapshot;";
-    static final String HOOK = "Lcom/android/server/pm/VineAppsHide;";
     static final String NAME = "shouldFilterApplication";
+
+    interface Editor {
+        /** Edits m's code in place; true if it changed */
+        boolean edit(Method m, MutableMethodImplementation impl);
+    }
+
+    static final class Patch {
+        final String type, hook;
+        final Editor editor;
+
+        /** `hook`: the hook's class name, its dex a resource of that name, or null */
+        Patch(String type, String hook, Editor editor) {
+            this.type = type;
+            this.hook = hook;
+            this.editor = editor;
+        }
+    }
+
+    static final Patch[] PATCHES = {
+        new Patch("Lcom/android/server/pm/ComputerEngine;", "VineAppsHide", Main::redirectFilter),
+        new Patch("Lcom/android/server/ethernet/EthernetNetworkFactory$NetworkInterfaceState;", null, Main::renameEthernet),
+        new Patch("Lcom/android/server/wifi/WifiServiceImpl;", "VineWifi", Main::redirectWifi),
+    };
+
+    /** The calls made to a hook, which it must declare */
+    static final List<MethodReference> redirected = new ArrayList<>();
+    static int edits;
 
     public static void main(String[] args) throws IOException {
         if (args.length != 2) {
@@ -50,32 +85,38 @@ public final class Main {
         try (ZipFile in = new ZipFile(args[0])) {
             List<String> dexes = new ArrayList<>();
             for (int i = 1; in.getEntry(dexName(i)) != null; i++) dexes.add(dexName(i));
-            byte[] patched = null;
-            String patchedName = null;
             List<DexBackedDexFile> files = new ArrayList<>();
             for (String name : dexes) {
                 DexBackedDexFile dex = new DexBackedDexFile(Opcodes.forApi(33), read(in.getInputStream(in.getEntry(name))));
                 for (ClassDef c : dex.getClasses()) {
-                    if (c.getType().equals(HOOK)) fail("already patched");
+                    for (Patch p : PATCHES) {
+                        if (p.hook != null && c.getType().equals(hookType(p))) fail("already patched");
+                    }
                 }
                 files.add(dex);
             }
-            for (int d = 0; d < files.size(); d++) {
-                DexBackedDexFile dex = files.get(d);
-                String name = dexes.get(d);
-                for (ClassDef c : dex.getClasses()) {
-                    if (c.getType().equals(ENGINE)) {
-                        patched = rewrite(dex, c);
-                        patchedName = name;
-                        break;
+            byte[] patched = null;
+            String patchedName = null;
+            Patch patch = null;
+            for (int d = 0; d < files.size() && patched == null; d++) {
+                for (ClassDef c : files.get(d).getClasses()) {
+                    for (Patch p : PATCHES) {
+                        if (patched == null && c.getType().equals(p.type)) {
+                            patched = rewrite(files.get(d), p);
+                            patchedName = dexes.get(d);
+                            patch = p;
+                        }
                     }
                 }
-                if (patched != null) break;
             }
-            if (patched == null) fail(ENGINE + " not found");
-            byte[] hook = read(Main.class.getResourceAsStream("/hook.dex"));
-            if (!declares(new DexBackedDexFile(Opcodes.forApi(33), hook), redirected)) {
-                fail("the hook lacks " + redirected);
+            if (patched == null) fail("nothing to patch");
+            if (edits == 0) fail(patch.hook == null ? "already patched" : "no call to redirect in " + patch.type);
+            byte[] hook = patch.hook == null ? null : read(Main.class.getResourceAsStream("/" + patch.hook + ".dex"));
+            if (hook != null) {
+                DexBackedDexFile hookDex = new DexBackedDexFile(Opcodes.forApi(33), hook);
+                for (MethodReference ref : redirected) {
+                    if (!declares(hookDex, ref)) fail("the hook lacks " + ref);
+                }
             }
             try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(args[1]))) {
                 long at = 0;
@@ -83,7 +124,7 @@ public final class Main {
                     ZipEntry entry = e.nextElement();
                     byte[] data = entry.getName().equals(patchedName) ? patched : read(in.getInputStream(entry));
                     at = put(out, at, entry.getName(), data);
-                    if (entry.getName().equals(dexes.get(dexes.size() - 1))) {
+                    if (hook != null && entry.getName().equals(dexes.get(dexes.size() - 1))) {
                         at = put(out, at, dexName(dexes.size() + 1), hook);
                     }
                 }
@@ -91,21 +132,11 @@ public final class Main {
         }
     }
 
-    static int calls(Method m) {
-        int n = 0;
-        for (com.android.tools.smali.dexlib2.iface.instruction.Instruction insn : m.getImplementation().getInstructions()) {
-            if (insn.getOpcode() == Opcode.INVOKE_INTERFACE_RANGE && isFilter(((Instruction3rc) insn).getReference())) n++;
-        }
-        return n;
+    /** Hooks are in the patched class's package */
+    static String hookType(Patch p) {
+        return p.type.substring(0, p.type.lastIndexOf('/') + 1) + p.hook + ";";
     }
 
-    static boolean isFilter(Object ref) {
-        return ref instanceof MethodReference && ((MethodReference) ref).getDefiningClass().equals(FILTER)
-                && ((MethodReference) ref).getName().equals(NAME);
-    }
-
-    /** The call rewrite() made, which the hook must declare */
-    static MethodReference redirected;
 
     static boolean declares(DexBackedDexFile dex, MethodReference ref) {
         for (ClassDef c : dex.getClasses()) {
@@ -124,47 +155,103 @@ public final class Main {
         return i == 1 ? "classes.dex" : "classes" + i + ".dex";
     }
 
-    /** Every call, all with the same descriptor */
-    static byte[] rewrite(DexBackedDexFile dex, ClassDef engine) throws IOException {
-        List<Method> methods = new ArrayList<>();
-        int calls = 0;
-        for (Method m : engine.getMethods()) {
-            if (m.getImplementation() != null && calls(m) > 0) {
-                MutableMethodImplementation impl = new MutableMethodImplementation(m.getImplementation());
-                List<BuilderInstruction> insns = impl.getInstructions();
-                for (int i = 0; i < insns.size(); i++) {
-                    BuilderInstruction insn = insns.get(i);
-                    if (insn.getOpcode() != Opcode.INVOKE_INTERFACE_RANGE) continue;
-                    if (!isFilter(((Instruction3rc) insn).getReference())) continue;
-                    MethodReference ref = (MethodReference) ((Instruction3rc) insn).getReference();
-                    List<CharSequence> params = new ArrayList<>();
-                    params.add(FILTER);
-                    params.addAll(ref.getParameterTypes());
-                    Instruction3rc call = (Instruction3rc) insn;
-                    redirected = new ImmutableMethodReference(HOOK, NAME, params, ref.getReturnType());
-                    impl.replaceInstruction(i, new BuilderInstruction3rc(Opcode.INVOKE_STATIC_RANGE,
-                            call.getStartRegister(), call.getRegisterCount(), redirected));
-                    calls++;
-                }
-                methods.add(new ImmutableMethod(m.getDefiningClass(), m.getName(), m.getParameters(), m.getReturnType(),
-                        m.getAccessFlags(), m.getAnnotations(), m.getHiddenApiRestrictions(), impl));
-            } else {
-                methods.add(m);
-            }
-        }
-        if (calls == 0) fail("no calls of " + FILTER + NAME);
+    /** `dex` with the patch's class's methods edited */
+    static byte[] rewrite(DexBackedDexFile dex, Patch patch) throws IOException {
         DexPool pool = new DexPool(dex.getOpcodes());
         for (ClassDef c : dex.getClasses()) {
-            if (c.getType().equals(ENGINE)) {
-                pool.internClass(new ImmutableClassDef(c.getType(), c.getAccessFlags(), c.getSuperclass(),
-                        c.getInterfaces(), c.getSourceFile(), c.getAnnotations(), c.getFields(), methods));
-            } else {
+            if (!c.getType().equals(patch.type)) {
                 pool.internClass(c);
+                continue;
             }
+            List<Method> methods = new ArrayList<>();
+            for (Method m : c.getMethods()) {
+                MutableMethodImplementation impl =
+                        m.getImplementation() == null ? null : new MutableMethodImplementation(m.getImplementation());
+                if (impl != null && patch.editor.edit(m, impl)) {
+                    methods.add(new ImmutableMethod(m.getDefiningClass(), m.getName(), m.getParameters(), m.getReturnType(),
+                            m.getAccessFlags(), m.getAnnotations(), m.getHiddenApiRestrictions(), impl));
+                } else {
+                    methods.add(m);
+                }
+            }
+            pool.internClass(new ImmutableClassDef(c.getType(), c.getAccessFlags(), c.getSuperclass(),
+                    c.getInterfaces(), c.getSourceFile(), c.getAnnotations(), c.getFields(), methods));
         }
         MemoryDataStore store = new MemoryDataStore();
         pool.writeTo(store);
         return Arrays.copyOf(store.getBuffer(), store.getSize());
+    }
+
+    /** Every call of AppsFilterSnapshot.shouldFilterApplication */
+    static boolean redirectFilter(Method m, MutableMethodImplementation impl) {
+        return redirect(impl, PATCHES[0], FILTER, NAME);
+    }
+
+    /** In WifiServiceImpl's getWifiEnabledState and getConnectionInfo */
+    static boolean redirectWifi(Method m, MutableMethodImplementation impl) {
+        if (m.getName().equals("getWifiEnabledState") && m.getParameterTypes().isEmpty())
+            return redirect(impl, PATCHES[2], "Lcom/android/server/wifi/ActiveModeWarden;", "getWifiState");
+        if (m.getName().equals("getConnectionInfo"))
+            return redirect(impl, PATCHES[2], "Lcom/android/server/wifi/WifiThreadRunner;", "call");
+        return false;
+    }
+
+    /**
+     * Each virtual or interface call of owner.name made a static call of
+     * the hook's method of that name, the receiver its first parameter
+     */
+    static boolean redirect(MutableMethodImplementation impl, Patch patch, String owner, String name) {
+        boolean changed = false;
+        List<BuilderInstruction> insns = impl.getInstructions();
+        for (int i = 0; i < insns.size(); i++) {
+            BuilderInstruction insn = insns.get(i);
+            Opcode op = insn.getOpcode();
+            boolean range = op == Opcode.INVOKE_INTERFACE_RANGE || op == Opcode.INVOKE_VIRTUAL_RANGE;
+            if (!range && op != Opcode.INVOKE_INTERFACE && op != Opcode.INVOKE_VIRTUAL) continue;
+            Object r = ((ReferenceInstruction) insn).getReference();
+            if (!(r instanceof MethodReference) || !((MethodReference) r).getDefiningClass().equals(owner)
+                    || !((MethodReference) r).getName().equals(name))
+                continue;
+            MethodReference ref = (MethodReference) r;
+            List<CharSequence> params = new ArrayList<>();
+            params.add(owner);
+            params.addAll(ref.getParameterTypes());
+            MethodReference hook = new ImmutableMethodReference(hookType(patch), name, params, ref.getReturnType());
+            redirected.add(hook);
+            if (range) {
+                Instruction3rc call = (Instruction3rc) insn;
+                impl.replaceInstruction(i, new BuilderInstruction3rc(Opcode.INVOKE_STATIC_RANGE,
+                        call.getStartRegister(), call.getRegisterCount(), hook));
+            } else {
+                Instruction35c call = (Instruction35c) insn;
+                impl.replaceInstruction(i, new BuilderInstruction35c(Opcode.INVOKE_STATIC, call.getRegisterCount(),
+                        call.getRegisterC(), call.getRegisterD(), call.getRegisterE(), call.getRegisterF(),
+                        call.getRegisterG(), hook));
+            }
+            edits++;
+            changed = true;
+        }
+        return changed;
+    }
+
+    /** const-string "Ethernet" right before NetworkAgentConfig.Builder.setLegacyTypeName */
+    static boolean renameEthernet(Method m, MutableMethodImplementation impl) {
+        boolean changed = false;
+        List<BuilderInstruction> insns = impl.getInstructions();
+        for (int i = 0; i + 1 < insns.size(); i++) {
+            BuilderInstruction insn = insns.get(i), next = insns.get(i + 1);
+            if (insn.getOpcode() != Opcode.CONST_STRING
+                    || !"Ethernet".equals(((ReferenceInstruction) insn).getReference().toString())
+                    || !(next instanceof ReferenceInstruction)
+                    || !(((ReferenceInstruction) next).getReference() instanceof MethodReference)
+                    || !((MethodReference) ((ReferenceInstruction) next).getReference()).getName().equals("setLegacyTypeName"))
+                continue;
+            impl.replaceInstruction(i, new BuilderInstruction21c(Opcode.CONST_STRING,
+                    ((OneRegisterInstruction) insn).getRegisterA(), new ImmutableStringReference("WIFI")));
+            edits++;
+            changed = true;
+        }
+        return changed;
     }
 
     /**

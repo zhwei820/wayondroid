@@ -2,6 +2,7 @@
 #include "ext4_extract.h"
 #include "../utils/vine_utils.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -738,16 +739,25 @@ std::string app_hidden_list(const std::string& R) {
     return out;
 }
 
-// services.jar with LineageOS's packages hidden from the guest's apps, by
-// scripts/rootless/build-pm-patch.sh's patcher on the host's ART: once per
-// extracted jar, which <store>/services-patched records (size and mtime).
-// Without the patcher or ART, or on a jar it does not know, the guest boots
-// unpatched. The jar's odex no longer matches; ART runs it from the dex.
-bool patch_services_jar(const Layout& l, const std::string& lib_dir, std::string* error) {
+// The guest's jars that scripts/rootless/pmpatch patches (Main.java says
+// how), on the host's ART: services.jar, so that apps do not see LineageOS's
+// packages, service-connectivity.jar, so that the network is named Wi-Fi,
+// and service-wifi.jar, so that WifiManager reports that network. Once per
+// extracted jar, which <store>/patched-<name> records (size
+// and mtime). Without the patcher or ART, or on a jar it does not know, the
+// guest boots unpatched. A patched jar's odex no longer matches; ART runs it
+// from the dex.
+const char* const kPatchedJars[] = {
+    "/system/framework/services.jar",
+    "/system/apex/com.android.tethering/javalib/service-connectivity.jar",
+    "/system/apex/com.android.wifi/javalib/service-wifi.jar",
+};
+
+bool patch_guest_jar(const Layout& l, const std::string& lib_dir, const std::string& path, std::string* error) {
     const std::string patcher = lib_dir + "/libvine_pm_patch.so";
     const char* const vm = "/apex/com.android.art/bin/dalvikvm64";
-    const std::string jar = l.rootfs + "/system/framework/services.jar", out = jar + ".vine";
-    const std::string stamp = l.store + "/services-patched";
+    const std::string jar = l.rootfs + path, out = jar + ".vine";
+    const std::string stamp = l.store + "/patched-" + path.substr(path.rfind('/') + 1);
     const auto mark = [&jar]() {
         struct stat st {};
         return stat(jar.c_str(), &st) == 0 ? std::to_string(st.st_size) + " " + std::to_string(st.st_mtime) + "\n" : "";
@@ -762,14 +772,14 @@ bool patch_services_jar(const Layout& l, const std::string& lib_dir, std::string
         _exit(127);
     }
     int st = 0;
-    if (pid < 0 || waitpid(pid, &st, 0) != pid) return fail_errno(error, "run the services.jar patcher");
+    if (pid < 0 || waitpid(pid, &st, 0) != pid) return fail_errno(error, "run the jar patcher");
     const int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
     if (code == 0 && (chmod(out.c_str(), 0644) != 0 || rename(out.c_str(), jar.c_str()) != 0))
         return fail_errno(error, "replace " + jar);
     unlink(out.c_str());
     // 2: already patched, or not a jar it knows; anything else is retried next boot
     if (code != 0 && code != 2) {
-        fprintf(stderr, "services.jar patcher failed (status %d); the guest's apps see LineageOS's packages\n", code);
+        fprintf(stderr, "patching %s failed (status %d); booting it unpatched\n", path.c_str(), code);
         return true;
     }
     return write_mode(stamp, mark(), 0644, error);
@@ -1276,7 +1286,8 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
     if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) ||
         !write_mode(l.store + "/app-hidden", app_hidden_list(R), 0644, error) ||
-        !patch_services_jar(l, o.lib_dir, error))
+        !std::all_of(std::begin(kPatchedJars), std::end(kPatchedJars),
+                     [&](const char* jar) { return patch_guest_jar(l, o.lib_dir, jar, error); }))
         return false;
     // scripts/radio/build-overlay.sh: EthernetTracker takes tawcroot's wlan0
     // and reports it as Wi-Fi, which is how a phone without a SIM is online.

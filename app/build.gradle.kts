@@ -220,7 +220,7 @@ val buildOverlays = tasks.register<Exec>("buildGuestOverlays") {
 }
 tasks.named("preBuild") { dependsOn(buildOverlays) }
 
-// The guest's services.jar patcher (scripts/rootless/build-pm-patch.sh): without it apps see LineageOS's packages
+// The guest's jar patcher (scripts/rootless/build-pm-patch.sh): without it apps see LineageOS's packages, an Ethernet network and Wi-Fi off
 val buildPmPatch = tasks.register<Exec>("buildGuestPmPatch") {
     workingDir = rootProject.projectDir
     doFirst { environment("ANDROID_HOME", androidComponents.sdkComponents.sdkDirectory.get().asFile.path) }

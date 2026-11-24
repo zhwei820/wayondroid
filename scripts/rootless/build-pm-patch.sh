@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds libvine_pm_patch.so into app/src/main/jniLibs/<abi>/: a jar (pmpatch/src with dexlib2 and
-# guava, and pmpatch/hook as hook.dex) that rootless_prep runs on the device's ART to hide
-# LineageOS's packages from the guest's apps (pmpatch/src/dev/vine/pmpatch/Main.java).
+# guava, and each pmpatch/hook class as <class>.dex) that rootless_prep runs on the device's ART to
+# patch the guest's services.jar, service-connectivity.jar and service-wifi.jar (pmpatch/src/dev/vine/pmpatch/Main.java).
 # Gradle runs it before every build.
 #
 # Needs the Android SDK (build-tools with d8, a platform's android.jar), a JDK and, once, the
@@ -31,17 +31,21 @@ dexlib2="$(fetch https://dl.google.com/android/maven2/com/android/tools/smali/sm
 guava="$(fetch https://repo1.maven.org/maven2/com/google/guava/guava/31.1-android/guava-31.1-android.jar \
     32ac2ed709d96d278b5d2e3e5cea178fa4939939c525fb647532f013308db309)"
 
-mkdir -p "$work/hook" "$work/hookdex" "$work/main" "$work/out"
+mkdir -p "$work/hook" "$work/main" "$work/out"
 javac -nowarn --release 11 -cp "$jar" -d "$work/hook" \
     $(find "$here/hook" "$here/stubs" -name '*.java')
-# The stubs stand for the guest's own classes: only the hook goes in
-"$bt/d8" --min-api 33 --lib "$jar" --classpath "$work/hook" --output "$work/hookdex" \
-    $(find "$work/hook" -name 'VineAppsHide*.class')
+# One dex per hook, <class>.dex; the stubs stand for the guest's own classes and stay out
+for src in $(find "$here/hook" -name '*.java'); do
+    h="$(basename "$src" .java)"
+    mkdir -p "$work/dex-$h"
+    "$bt/d8" --min-api 33 --lib "$jar" --classpath "$work/hook" --output "$work/dex-$h" \
+        $(find "$work/hook" -name "$h.class" -o -name "$h\$*.class")
+    cp "$work/dex-$h/classes.dex" "$work/out/$h.dex"
+done
 javac -nowarn --release 11 -cp "$dexlib2:$guava" -d "$work/main" $(find "$here/src" -name '*.java')
 "$bt/d8" --release --min-api 29 --lib "$jar" --output "$work/out" \
     $(find "$work/main" -name '*.class') "$dexlib2" "$guava" 2>&1 | grep -v '^Warning' >&2 || true
-cp "$work/hookdex/classes.dex" "$work/out/hook.dex"
-(cd "$work/out" && jar -c -0 -M -f "$work/pmpatch.jar" classes*.dex hook.dex)
+(cd "$work/out" && jar -c -0 -M -f "$work/pmpatch.jar" *.dex)
 for abi in arm64-v8a x86_64; do
     mkdir -p "$root/app/src/main/jniLibs/$abi"
     cp "$work/pmpatch.jar" "$root/app/src/main/jniLibs/$abi/libvine_pm_patch.so"
