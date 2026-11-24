@@ -291,7 +291,7 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
 // check aborts.
 std::string waydroid_prop(int dpi, bool gpu) {
     return std::string(gpu ? "" : "ro.hardware.gralloc=default\n") +
-           (gpu ? "ro.hardware.egl=adreno\n" : "ro.hardware.egl=angle\n") +
+           "ro.hardware.egl=angle\n" +
            (gpu ? "ro.hardware.vulkan=adreno\nro.vendor.display.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
            "sys.use_memfd=true\n"
            // Codec2 takes linear buffers from DMA-BUF heaps, which apps
@@ -705,15 +705,12 @@ bool patch_health_hal(const std::string& R, std::string* error) {
 // through ANGLE's EGL. ANGLE's own GLES library moves to an Adreno driver
 // library's name, libllvm-glnext.so, beside the EGL library, whose
 // DT_NEEDED and the name it dlopen()s are rewritten to it (shorter, in
-// place). With the GPU the driver is named adreno too (ro.hardware.egl):
-// the EGL library and the shim are also installed under the Adreno names,
-// and apps don't see the ANGLE ones. Without it, the angle names stay in use.
-const char* const kAngleHidden[] = {
-    "/vendor/lib64/egl/libEGL_angle.so",  "/vendor/lib64/egl/libGLESv1_CM_angle.so",
-    "/vendor/lib64/egl/libGLESv2_angle.so", "/vendor/lib64/egl/libEGL_mesa.so",
-    "/vendor/lib64/egl/libGLESv1_CM_mesa.so", "/vendor/lib64/egl/libGLESv2_mesa.so"};
+// place). ro.hardware.egl stays angle: ANGLE's EGL library loaded under
+// another name finds no GLES library and every GL process crashes.
+const char* const kAngleHidden[] = {"/vendor/lib64/egl/libEGL_mesa.so", "/vendor/lib64/egl/libGLESv1_CM_mesa.so",
+                                    "/vendor/lib64/egl/libGLESv2_mesa.so"};
 
-bool install_gles_shim(const std::string& R, const std::string& lib_dir, bool gpu, std::string* error) {
+bool install_gles_shim(const std::string& R, const std::string& lib_dir, std::string* error) {
     // Beside the EGL library, which dlopen()s it from its own directory
     const std::string egl = R + "/vendor/lib64/egl", angle_gles = egl + "/libllvm-glnext.so";
     const std::string earlier = R + "/vendor/lib64/libllvm-glnext.so";
@@ -739,9 +736,7 @@ bool install_gles_shim(const std::string& R, const std::string& lib_dir, bool gp
         !write_mode(egl + "/libGLESv1_CM_angle.so", *shim, 0644, error))
         return false;
     for (const char* f : {"/libEGL_adreno.so", "/libGLESv2_adreno.so", "/libGLESv1_CM_adreno.so"}) unlink((egl + f).c_str());
-    return !gpu || (write_mode(egl + "/libEGL_adreno.so", *egl_lib, 0644, error) &&
-                    write_mode(egl + "/libGLESv2_adreno.so", *shim, 0644, error) &&
-                    write_mode(egl + "/libGLESv1_CM_adreno.so", *shim, 0644, error));
+    return true;
 }
 
 // tawcroot's device view (tawcroot/include/device_view.h): what apps read
@@ -1496,7 +1491,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.redfin.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
-    if (!install_gles_shim(R, o.lib_dir, o.gpu, error)) return false;
+    if (!install_gles_shim(R, o.lib_dir, error)) return false;
     std::string angle_hidden;
     if (o.gpu) {
         for (const char* f : kAngleHidden) angle_hidden += std::string(f) + "\n";
