@@ -359,7 +359,7 @@ def main():
     check(not os.path.exists(os.path.join(R, "system/product/app/Etar")), "Lineage apps removed")
     hidden = read(os.path.join(W, "tawcroot/app-hidden")).split("\n")
     check("/system/etc/init/init.waydroid.rc" in hidden and "/system/product/etc/vine" in hidden and
-          "/product/etc/vine" in hidden and "/.tawcroot-tcp-v1" in hidden and
+          "/product/etc/vine" in hidden and "/.tawcroot-tcp-v1" in hidden and "/run" in hidden and
           "/vendor/lib64/hw/hwcomposer.redfin.so" not in hidden and
           not any("Jelly" in p for p in hidden), "Waydroid's files hidden from apps: " + str(hidden))
     ctx = read(os.path.join(R, "vendor/etc/selinux/vendor_property_contexts"))
@@ -369,6 +369,9 @@ def main():
     check("service zygote " in z and "zygote_secondary" not in z, "zygote64 rc: " + z)
     rc_path = os.path.join(R, "system/product/etc/init/vine-rootless.rc")
     rc = read(rc_path)
+    check("VIRTGPU" not in rc and os.readlink(os.path.join(R, "dev/socket/kgsl-0")) == "/run/user/1000/kumquat-gpu-0" and
+          os.readlink(os.path.join(R, "dev/socket/gralloc")) == "/run/user/1000/gralloc-0",
+          "GPU sockets found without environment variables: " + rc)
     check("service lmkd /system/bin/vine_lmkd --budget-mb 1536\n" in rc and "vine_hal_service" in rc and
           "write /run/user/1000/boot_completed 1" in rc, "vine-rootless.rc")
     check(os.path.exists(rc_path) and stat.S_IMODE(os.stat(rc_path).st_mode) == 0o644, "rc mode 644")
