@@ -596,6 +596,21 @@ const std::pair<const char*, const char*> kCameraFiles[] = {
     {"libvine_cam_front.so", "/etc/config/emu_camera_front.json"},
 };
 
+// Interface libraries the HAL needs that the image has only in /system (not
+// in the VNDK): copied into /vendor, as a device's vendor partition carries them
+const char* const kCameraSystemLibs[] = {
+    "android.frameworks.sensorservice@1.0.so", "android.hidl.allocator@1.0.so",
+    "android.hardware.camera.provider@2.4.so", "android.hardware.camera.provider@2.5.so",
+    "android.hardware.camera.provider@2.6.so", "android.hardware.camera.provider@2.7.so",
+    "android.hardware.camera.common@1.0.so",   "android.hardware.camera.device@1.0.so",
+    "android.hardware.camera.device@3.2.so",   "android.hardware.camera.device@3.3.so",
+    "android.hardware.camera.device@3.4.so",   "android.hardware.camera.device@3.5.so",
+    "android.hardware.camera.device@3.6.so",   "android.hardware.camera.device@3.7.so",
+    "android.hardware.camera.metadata@3.2.so", "android.hardware.camera.metadata@3.3.so",
+    "android.hardware.camera.metadata@3.4.so", "android.hardware.camera.metadata@3.5.so",
+    "android.hardware.camera.metadata@3.6.so",
+};
+
 // The HAL's configurations: apps have no use for them, and the names say emulator
 const char* const kCameraHidden[] = {"/vendor/etc/config/emu_camera_back.json", "/vendor/etc/config/emu_camera_front.json"};
 
@@ -611,6 +626,13 @@ const std::pair<const char*, const char*> kCameraFeatures[] = {
     {"android.hardware.camera.raw.xml", "android.hardware.camera.capability.raw\0"},
 };
 
+bool copy_if_changed(const std::string& from, const std::string& to, std::string* error) {
+    struct stat a {}, b {};
+    if (stat(from.c_str(), &a) != 0) return fail_errno(error, "stat " + from);
+    if (stat(to.c_str(), &b) == 0 && a.st_size == b.st_size) return true;
+    return copy_mode(from, to, 0644, error);
+}
+
 bool install_camera_hal(const std::string& R, const std::string& lib_dir, bool* installed, std::string* error) {
     *installed = false;
     for (const auto& [lib, path] : kCameraFiles) {
@@ -622,6 +644,12 @@ bool install_camera_hal(const std::string& R, const std::string& lib_dir, bool* 
     }
     for (const auto& [lib, path] : kCameraFiles) {
         if (!copy_mode(lib_dir + "/" + lib, V + path, std::string(path).rfind("/bin/", 0) == 0 ? 0755 : 0644, error))
+            return false;
+    }
+    for (const char* lib : kCameraSystemLibs) {
+        const std::string from = R + "/system/lib64/" + lib, to = V + "/lib64/" + lib;
+        if (is_regular_file(from) && !is_regular_file(R + "/system/apex/com.android.vndk.current/lib64/" + lib) &&
+            !copy_if_changed(from, to, error))
             return false;
     }
     for (const auto& [file, features] : kCameraFeatures) {
