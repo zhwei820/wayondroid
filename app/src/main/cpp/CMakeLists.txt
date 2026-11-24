@@ -139,11 +139,11 @@ target_link_options(vine_vulkan_hal PRIVATE -Wl,-z,max-page-size=16384 -Wl,-sona
 set_target_properties(vine_vulkan_hal PROPERTIES NO_SONAME TRUE)
 
 # The guest's GLES driver in front of ANGLE (rootless/gles_shim.c), as
-# libGLESv2_adreno.so and libGLESv1_CM_adreno.so
+# libGLESv2_angle.so and libGLESv1_CM_angle.so
 add_library(vine_gles_shim SHARED rootless/gles_shim.c)
 target_compile_options(vine_gles_shim PRIVATE -fvisibility=hidden)
 target_link_libraries(vine_gles_shim PRIVATE dl)
-target_link_options(vine_gles_shim PRIVATE -Wl,-z,max-page-size=16384 -Wl,-soname,libGLESv2_adreno.so)
+target_link_options(vine_gles_shim PRIVATE -Wl,-z,max-page-size=16384 -Wl,-soname,libGLESv2_angle.so)
 set_target_properties(vine_gles_shim PROPERTIES NO_SONAME TRUE)
 
 # Preloaded into the guest's vold: emulated storage without FUSE

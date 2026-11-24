@@ -181,10 +181,6 @@ static const char *maps_alias(const char *p, size_t n)
 	static const char *const alias[][2] = {
 		{ "/memfd:tawc-binder", "/dev/binderfs/binder" },
 		{ "/memfd:gfxstream", "/dev/kgsl-3d0" },
-		/* ANGLE's GLES library, which the EGL library the guest loads
-		 * as the Adreno one needs (rootless_prep.cpp): an Adreno
-		 * driver's shader compiler, hardlinked there */
-		{ "/vendor/lib64/egl/libGLESv2_angle.so", "/vendor/lib64/libllvm-glnext.so" },
 	};
 	for (size_t a = 0; a < sizeof alias / sizeof alias[0]; a++) {
 		size_t k = 0;
