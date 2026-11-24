@@ -33,6 +33,9 @@
 #define CELL_ID "0000B804"
 #define ACT_LTE 7
 #define TECH_LTE 5 /* +CTEC: bit index of MDM_LTE */
+/* Android's RegState NOT_REG_MT_SEARCHING_OP_EM, which the RIL passes on:
+ * a phone without a SIM camps on a cell for emergency calls only */
+#define REG_EMERGENCY 12
 
 static void put(struct modem_out* out, const char* fmt, ...)
 {
@@ -264,10 +267,14 @@ static void sim_io(struct modem* m, struct modem_out* out, const char* args)
     line(out, "OK");
 }
 
-static void registration(struct modem* m, struct modem_out* out, const char* prefix)
+/* Circuit-switched (+CREG) or packet (+CGREG, +CEREG); only the former
+ * has emergency service without a SIM */
+static void registration(struct modem* m, struct modem_out* out, const char* prefix, bool voice)
 {
     if (m->sim && m->radio_on)
         line(out, "%s %d,1,\"%s\",\"%s\",%d", prefix, m->creg_mode, AREA_CODE, CELL_ID, ACT_LTE);
+    else if (m->radio_on && voice)
+        line(out, "%s %d,%d,\"%s\",\"%s\",%d", prefix, m->creg_mode, REG_EMERGENCY, AREA_CODE, CELL_ID, ACT_LTE);
     else
         line(out, "%s %d,0", prefix, m->creg_mode);
     line(out, "OK");
@@ -287,7 +294,7 @@ static void command(struct modem* m, struct modem_out* out, const char* c)
         if (on != m->radio_on) {
             m->radio_on = on;
             /* the RIL polls registration on this */
-            line(out, "+CREG: %d", m->sim && on ? 1 : 0);
+            line(out, "+CREG: %d", !on ? 0 : m->sim ? 1 : REG_EMERGENCY);
         }
     } else if (!strcmp(c, "+CPIN?")) {
         if (m->sim) {
@@ -313,11 +320,11 @@ static void command(struct modem* m, struct modem_out* out, const char* c)
         m->creg_mode = atoi(c + 6);
         line(out, "OK");
     } else if (!strcmp(c, "+CREG?")) {
-        registration(m, out, "+CREG:");
+        registration(m, out, "+CREG:", true);
     } else if (!strcmp(c, "+CGREG?")) {
-        registration(m, out, "+CGREG:");
+        registration(m, out, "+CGREG:", false);
     } else if (!strcmp(c, "+CEREG?")) {
-        registration(m, out, "+CEREG:");
+        registration(m, out, "+CEREG:", false);
     } else if (!strcmp(c, "+COPS?")) {
         if (!m->sim || !m->radio_on) line(out, "+COPS: 0");
         else if (m->cops_format == 2) line(out, "+COPS: 0,2,\"%s\"", m->net_operator);
@@ -340,8 +347,9 @@ static void command(struct modem* m, struct modem_out* out, const char* c)
         line(out, "+CTEC: %d", TECH_LTE);
         line(out, "OK");
     } else if (!strcmp(c, "+CSQ")) {
-        /* gsm, cdma, evdo unknown; LTE rssi 20, rsrp -90 dBm; the rest unknown */
-        if (m->sim && m->radio_on)
+        /* gsm, cdma, evdo unknown; LTE rssi 20, rsrp -90 dBm; the rest
+         * unknown. The cell camped on is heard with a SIM or without. */
+        if (m->radio_on)
             line(out, "+CSQ: 99,99,-1,-1,-1,-1,-1,20,90,%d,%d,%d,%d,%d,99,99,%d,%d,%d,%d,%d,%d", INT32_MAX, INT32_MAX,
                  INT32_MAX, INT32_MAX, INT32_MAX, INT32_MAX, INT32_MAX, INT32_MAX, INT32_MAX, INT32_MAX, INT32_MAX);
         else
