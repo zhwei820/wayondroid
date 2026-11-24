@@ -93,6 +93,10 @@ public final class VineWifiInfo {
             set(info, "setWifiStandard", int.class, 5); // ScanResult.WIFI_STANDARD_11AC
             set(info, "setMacAddress", String.class, macText);
             set(info, "setInetAddress", InetAddress.class, ip);
+            // The primary network, as wifitrackerlib shows only that one as
+            // connected; PSK, as config() and scan() have it
+            set(info, "setIsPrimary", boolean.class, true);
+            set(info, "setCurrentSecurityType", int.class, 2); // WifiInfo.SECURITY_TYPE_PSK
             return info;
         } catch (Exception e) {
             return null;
