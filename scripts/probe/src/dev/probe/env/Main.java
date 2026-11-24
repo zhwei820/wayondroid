@@ -131,7 +131,11 @@ public class Main extends Activity {
         put("net.interfaces", ifs);
         WifiManager wm = getSystemService(WifiManager.class);
         put("wifi.enabled", wm.isWifiEnabled());
-        put("wifi.ssid", wm.getConnectionInfo().getSSID());
+        android.net.wifi.WifiInfo wi = wm.getConnectionInfo();
+        put("wifi.ssid", wi.getSSID());
+        put("wifi.info", wi.getBSSID() + " rssi=" + wi.getRssi() + " " + wi.getLinkSpeed() + "Mbps " + wi.getFrequency()
+                + "MHz std=" + wi.getWifiStandard() + " id=" + wi.getNetworkId() + " " + wi.getSupplicantState()
+                + " ip=" + wi.getIpAddress() + " mac=" + wi.getMacAddress());
     }
 
     void sensors() {
