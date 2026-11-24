@@ -646,9 +646,11 @@ static long append_secs_cs(char *buf, size_t cap, size_t *pos,
  * --version` never starts. uname(2) is unaffected, so the real kernel
  * strings are available: the synthesized file has the kernel's own
  * shape — release, builder parenthetical, compiler parenthetical,
- * version — with only the two parentheticals invented.
- * `tawcroot@android` doubles as the marker the hosted tests grep for,
- * since a test host's real /proc/version IS readable and would
+ * version — with only the two parentheticals invented: those of a
+ * Google-built android12-5.10 GKI kernel, as the guest poses as a phone
+ * and apps that can read the file look for emulator builders there.
+ * `build-user@build-host` doubles as the marker the hosted tests grep
+ * for, since a test host's real /proc/version IS readable and would
  * otherwise be indistinguishable from a passthrough. */
 static long open_proc_version_shadow(void)
 {
@@ -660,12 +662,15 @@ static long open_proc_version_shadow(void)
 	uts.f[2][64] = 0;
 	uts.f[3][64] = 0;
 
-	char buf[320];
+	char buf[512];
 	size_t pos = 0;
 	long e = tawc_str_append(buf, sizeof buf, &pos, "Linux version ");
 	if (!e) e = tawc_str_append(buf, sizeof buf, &pos, uts.f[2]);
 	if (!e) e = tawc_str_append(buf, sizeof buf, &pos,
-				    " (tawcroot@android) (tawcroot) ");
+				    " (build-user@build-host) (Android (7284624, based on r416183b) clang version 12.0.5 "
+				    "(https://android.googlesource.com/toolchain/llvm-project c935d99d7cf2016289302412d708641d52d2f7ee), "
+				    "LLD 12.0.5 (/buildbot/src/android/llvm-toolchain/out/llvm-project/lld "
+				    "c935d99d7cf2016289302412d708641d52d2f7ee)) ");
 	if (!e) e = tawc_str_append(buf, sizeof buf, &pos, uts.f[3]);
 	if (!e) e = tawc_str_append(buf, sizeof buf, &pos, "\n");
 	if (e) return TAWC_EFAULT;

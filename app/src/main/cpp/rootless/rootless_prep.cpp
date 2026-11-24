@@ -549,6 +549,49 @@ bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* i
     return true;
 }
 
+// Waydroid's legacy HALs that hw_get_module finds by ro.board.platform,
+// which the guest's identity sets to the Pixel 5's: named for ro.hardware,
+// looked up first, instead
+bool install_device_hals(const std::string& R, std::string* error) {
+    for (const char* dir : {"/vendor/lib/hw/", "/vendor/lib64/hw/"}) {
+        for (const char* module : {"audio.primary", "gatekeeper", "hwcomposer", "memtrack"}) {
+            const std::string from = R + dir + module + ".waydroid.so", to = R + dir + module + ".redfin.so";
+            if (is_regular_file(from) && rename(from.c_str(), to.c_str()) != 0)
+                return fail(error, "could not rename " + from + ": " + strerror(errno));
+        }
+    }
+    return true;
+}
+
+// LineageOS's and Waydroid's own apps and overlays, which a Pixel lacks
+// and any app can list. Kept: the browser and camera apps' intents need,
+// and the Lineage framework packages Settings and SystemUI depend on.
+const char* const kForeignApps[] = {
+    "/system/product/app/Backgrounds",         "/system/product/app/Etar",
+    "/system/product/app/Recorder",            "/system/product/app/ApertureLensLauncher",
+    "/system/product/priv-app/Eleven",         "/system/product/overlay/FontRubik",
+    "/system/product/overlay/FontLato",        "/system/product/overlay/LineageBlackTheme",
+    "/system/system_ext/app/Profiles",         "/system/system_ext/priv-app/WaydroidUpdater",
+    "/system/system_ext/priv-app/Seedvault",
+};
+
+bool remove_foreign_apps(const std::string& R, std::string* error) {
+    for (const char* app : kForeignApps) {
+        if (!remove_if_exists(R + app, error)) return false;
+    }
+    return true;
+}
+
+// Properties that name LineageOS or Waydroid, in vendor_default_prop:
+// tawcroot denies apps that area, the guest's services keep reading them
+const char kHiddenPropContexts[] =
+    "waydroid.               u:object_r:vendor_default_prop:s0\n"
+    "persist.waydroid.       u:object_r:vendor_default_prop:s0\n"
+    "ro.lineage.             u:object_r:vendor_default_prop:s0\n"
+    "sys.lineage_            u:object_r:vendor_default_prop:s0\n"
+    "ro.modversion           u:object_r:vendor_default_prop:s0 exact string\n"
+    "ro.lineagelegal.url     u:object_r:vendor_default_prop:s0 exact string\n";
+
 } // namespace
 
 Layout layout_for(const std::string& instance_path) {
@@ -607,6 +650,9 @@ DeviceIdentity guest_identity() {
     id.soc_manufacturer = "QTI";
     id.soc_model = "SM7250";
     id.props = {
+        // Snapdragon 765G's; Waydroid's "waydroid" otherwise. Its HALs that
+        // were found by it are renamed for ro.hardware (install_device_hals)
+        {"ro.board.platform", "lito"},
         {"ro.product.product.brand", "google"},
         {"ro.product.product.device", "redfin"},
         {"ro.product.product.manufacturer", "Google"},
@@ -972,16 +1018,19 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // gralloc reads ro.vendor.vine.gpu in every app, and tawcroot denies
     // apps the vendor_default_prop area that "ro.vendor." falls in
     const std::string vendor_prop_contexts = R + "/vendor/etc/selinux/vendor_property_contexts";
-    if (const auto text = read_file(vendor_prop_contexts); text && text->find("\nro.vendor.vine.gpu ") == std::string::npos &&
-        !write_mode(vendor_prop_contexts,
-                    *text + (text->empty() || text->back() == '\n' ? "" : "\n") +
-                        "ro.vendor.vine.gpu u:object_r:exported_default_prop:s0 exact bool\n",
-                    0644, error))
-        return false;
+    if (const auto text = read_file(vendor_prop_contexts)) {
+        std::string t = *text;
+        if (!t.empty() && t.back() != '\n') t += "\n";
+        if (t.find("\nro.vendor.vine.gpu ") == std::string::npos)
+            t += "ro.vendor.vine.gpu u:object_r:exported_default_prop:s0 exact bool\n";
+        if (t.find("\nwaydroid. ") == std::string::npos) t += kHiddenPropContexts;
+        if (t != *text && !write_mode(vendor_prop_contexts, t, 0644, error)) return false;
+    }
     if (o.gpu && (!copy_mode(o.lib_dir + "/libvine_vk_gfxstream.so", hw + "/vulkan.gfxstream.so", 0644, error) ||
                   !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.vine.so", 0644, error)))
         return false;
     if (!install_sensors_hal(R, o.lib_dir, error)) return false;
+    if (!install_device_hals(R, error) || !remove_foreign_apps(R, error)) return false;
     // scripts/radio/build-overlay.sh: EthernetTracker takes tawcroot's wlan0
     // and reports it as Wi-Fi, which is how a phone without a SIM is online.
     // Without it wlan0 matches no interface regex and the guest is offline.

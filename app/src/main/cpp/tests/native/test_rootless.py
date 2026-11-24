@@ -176,9 +176,15 @@ def build_images(top, inst, audio_hal_class=1, sensors_libs=True, radio_libs=Tru
     open(os.path.join(vend, "etc/vintf/manifest.xml"), "w").write(
         "<manifest>\n" + hal("android.hardware.media.omx") + hal("android.hardware.light") + "</manifest>\n")
     open(os.path.join(vend, "etc/vintf/manifest/omx.xml"), "w").write("<manifest>\n" + hal("android.hardware.media.omx") + "</manifest>\n")
-    open(os.path.join(vend, "build.prop"), "w").write("ro.vendor.product.cpu.abilist=arm64-v8a,armeabi-v7a\nro.vendor.x=1\n")
+    open(os.path.join(vend, "build.prop"), "w").write(
+        "ro.vendor.product.cpu.abilist=arm64-v8a,armeabi-v7a\nro.vendor.x=1\nro.board.platform=waydroid\n")
     os.makedirs(os.path.join(vend, "lib64/hw"))
     open(os.path.join(vend, "lib64/hw/gralloc.default.so"), "w").write("default gralloc\n")
+    open(os.path.join(vend, "lib64/hw/hwcomposer.waydroid.so"), "w").write("hwc\n")
+    os.makedirs(os.path.join(vend, "etc/selinux"), exist_ok=True)
+    open(os.path.join(vend, "etc/selinux/vendor_property_contexts"), "w").write("ro.hardware. u:object_r:vendor_default_prop:s0\n")
+    os.makedirs(os.path.join(sysd, "system/product/app/Etar"), exist_ok=True)
+    open(os.path.join(sysd, "system/product/app/Etar/Etar.apk"), "w").write("etar\n")
     if radio_libs:  # the image's radio@1.0 and 1.1, which the RIL uses with the emulator's newer ones
         for v in ("1.0", "1.1"):
             open(os.path.join(vend, f"lib64/android.hardware.radio@{v}.so"), "w").write(f"image radio {v}\n")
@@ -340,7 +346,14 @@ def main():
     check("ro.product.board=redfin\n" in prop and "ro.soc.model=SM7250\n" in prop and
           "ro.vendor.build.fingerprint=" + pixel5 + "\n" in prop and "ro.product.system.model=mainline\n" in prop,
           "Pixel 5 props the image lacks, added: " + prop)
-    check("ro.vendor.product.cpu.abilist=arm64-v8a\n" in read(os.path.join(R, "vendor/build.prop")), "vendor props")
+    vprop = read(os.path.join(R, "vendor/build.prop"))
+    check("ro.vendor.product.cpu.abilist=arm64-v8a\n" in vprop and "ro.board.platform=lito\n" in vprop, "vendor props: " + vprop)
+    check(read(os.path.join(R, "vendor/lib64/hw/hwcomposer.redfin.so")) == "hwc\n" and
+          not os.path.exists(os.path.join(R, "vendor/lib64/hw/hwcomposer.waydroid.so")), "HAL found by ro.hardware")
+    check(not os.path.exists(os.path.join(R, "system/product/app/Etar")), "Lineage apps removed")
+    ctx = read(os.path.join(R, "vendor/etc/selinux/vendor_property_contexts"))
+    check(ctx.startswith("ro.hardware. ") and ctx.count("\nwaydroid. ") == 1 and "\nro.lineage. " in ctx and
+          ctx.count("\nro.vendor.vine.gpu ") == 1, "Waydroid and Lineage props hidden from apps: " + ctx)
     z = read(os.path.join(R, "system/etc/init/hw/init.zygote64.rc"))
     check("service zygote " in z and "zygote_secondary" not in z, "zygote64 rc: " + z)
     rc_path = os.path.join(R, "system/product/etc/init/vine-rootless.rc")

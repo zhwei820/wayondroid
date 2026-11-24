@@ -282,7 +282,7 @@ test(hosted_proc_version_shadow_content)
 	 * the host's real /proc/version IS readable, so the marker is
 	 * what distinguishes the shadow from a passthrough. */
 	test_true(strncmp(buf, "Linux version ", 14) == 0);
-	test_nonnull(strstr(buf, "(tawcroot@android)"));
+	test_nonnull(strstr(buf, "(build-user@build-host)"));
 	test_int_eq(buf[strlen(buf) - 1], '\n');
 
 	th_teardown(&v);
