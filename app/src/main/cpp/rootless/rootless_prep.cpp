@@ -1052,6 +1052,24 @@ bool write_device_view(const std::string& R, const std::string& store, std::stri
 // The Pixel 5's hardware features where Waydroid's differ: no camera
 // without the camera HAL (declaring one that won't open is worse than none),
 // Bluetooth LE. LineageOS's TERMINFO would be in every app's environment.
+// Waydroid's device manifest is FCM level 3, whose framework matrix
+// requires HIDL DRM and OMX HALs the image doesn't have; with
+// ro.treble.enabled (the image's) Build.isBuildConsistent() then fails and
+// every boot shows "There's an internal problem with your device". They
+// become optional: a static check, nothing at run time looks at it.
+bool relax_framework_matrix(const std::string& R, std::string* error) {
+    const std::string path = R + "/system/etc/vintf/compatibility_matrix.3.xml";
+    auto xml = read_file(path);
+    if (!xml) return true;
+    bool changed = false;
+    for (const char* hal : {"android.hardware.drm", "android.hardware.media.omx"}) {
+        const std::string from = std::string("<hal format=\"hidl\" optional=\"false\">\n        <name>") + hal + "</name>";
+        const std::string to = std::string("<hal format=\"hidl\" optional=\"true\">\n        <name>") + hal + "</name>";
+        for (size_t at; (at = xml->find(from)) != std::string::npos; changed = true) xml->replace(at, from.size(), to);
+    }
+    return !changed || write_mode(path, *xml, 0644, error);
+}
+
 bool apply_device_features(const std::string& R, bool camera, std::string* error) {
     const std::string P = R + "/vendor/etc/permissions";
     for (const auto& [f, features] : kCameraFeatures)
@@ -1765,6 +1783,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (camera)
         for (const char* f : kCameraHidden) extra_hidden += std::string(f) + "\n";
     if (!id.empty() && !apply_device_features(R, camera, error)) return false;
+    if (!id.empty() && !relax_framework_matrix(R, error)) return false;
     if (!patch_health_hal(R, error)) return false;
     if (id.empty() ? !remove_if_exists(l.store + "/device", error) : !write_device_view(R, l.store, error)) return false;
     // The guest's /sys/class/power_supply, which VineVMManager fills from
