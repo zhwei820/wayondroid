@@ -314,6 +314,7 @@ bool Instance::launch_services(std::string* error) {
         cfg_.width = id.width;
         cfg_.height = id.height;
     }
+    if (id.refresh_hz > 0) cfg_.refresh_hz = id.refresh_hz;
     binderd_pid_ = spawn({lib + "libbinderd.so", "binderfs"}, W, layout_.logs + "/binderd.log");
     wl_pid_ = spawn({lib + "libvine_wl.so", "--socket", "run/wayland-0", "--vinefb", layout_.vinefb, "--create",
                      std::to_string(cfg_.width) + "x" + std::to_string(cfg_.height), "--input", "input",

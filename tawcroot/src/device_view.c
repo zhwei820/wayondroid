@@ -265,9 +265,68 @@ static int sorted_policies(const char *buf, long n, int *out, int cap)
 	return count;
 }
 
+/* `path` is a line of <store>/device/<file> (guest paths, one a line) */
+static int listed_in(const char *file, const char *path)
+{
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	char *list = scratch->buf[1];
+	if (read_device(file, list, TAWCROOT_PATH_SCRATCH_SIZE) <= 0) return 0;
+	size_t pl = tawc_strlen(path);
+	while (pl > 1 && path[pl - 1] == '/') pl--;
+	for (const char *l = list; *l;) {
+		size_t k = 0;
+		while (l[k] && l[k] != '\n') k++;
+		if (k == pl) {
+			size_t i = 0;
+			while (i < k && l[i] == path[i]) i++;
+			if (i == k) return 1;
+		}
+		l += k + (l[k] ? 1 : 0);
+	}
+	return 0;
+}
+
+/* Drops the entries of `dir` that <store>/device/unlisted names */
+static long drop_unlisted(const char *dir, char *buf, long n)
+{
+	TAWCROOT_PATH_SCRATCH_AUTO(scratch);
+	char *list = scratch->buf[1];
+	if (read_device("unlisted", list, TAWCROOT_PATH_SCRATCH_SIZE) <= 0) return n;
+	size_t dl = tawc_strlen(dir);
+	while (dl > 1 && dir[dl - 1] == '/') dl--;
+	long out = 0;
+	for (long off = 0; off < n;) {
+		unsigned short reclen;
+		__builtin_memcpy(&reclen, buf + off + 16, sizeof reclen);
+		if (reclen == 0 || off + reclen > n) break;
+		const char *name = buf + off + 19;
+		int drop = 0;
+		for (const char *l = list; *l && !drop;) {
+			size_t k = 0;
+			while (l[k] && l[k] != '\n') k++;
+			size_t i = 0;
+			while (i < dl && i < k && l[i] == dir[i]) i++;
+			if (i == dl && k > dl + 1 && l[dl] == '/') {
+				size_t j = 0;
+				while (name[j] && dl + 1 + j < k && name[j] == l[dl + 1 + j]) j++;
+				drop = !name[j] && dl + 1 + j == k;
+			}
+			l += k + (l[k] ? 1 : 0);
+		}
+		if (!drop) {
+			if (out != off) __builtin_memmove(buf + out, buf + off, reclen);
+			out += reclen;
+		}
+		off += reclen;
+	}
+	return out;
+}
+
 long tawcroot_device_dirents(const char *dir, char *buf, long n)
 {
-	if (!tawc_streq(dir, "/sys/devices/system/cpu/cpufreq") || !has_device()) return n;
+	if (!has_device()) return n;
+	n = drop_unlisted(dir, buf, n);
+	if (!tawc_streq(dir, "/sys/devices/system/cpu/cpufreq")) return n;
 	int host[16], dev[16];
 	int nh = sorted_policies(buf, n, host, 16);
 	if (!nh) return n;
@@ -305,6 +364,9 @@ long tawcroot_device_dirents(const char *dir, char *buf, long n)
 
 long tawcroot_device_open(const char *path, int flags)
 {
+	/* A directory an app may search but not read, as /dev under a phone's policy */
+	if (!(flags & O_PATH) && tawcroot_guest_is_app() && has_device() && listed_in("unlistable", path))
+		return TAWC_EACCES;
 	if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_PATH | O_DIRECTORY))) return TAWC_ENOSYS;
 	if (tawc_streq(path, "/proc/meminfo")) return open_meminfo(flags);
 	if (own_proc_file(path, "auxv")) return open_auxv(flags);

@@ -481,7 +481,8 @@ static long handle_getdents64(const tawcroot_syscall_args *args,
 				hs->buf[0][al] = 0;
 				for (;;) {
 					long kept = tawcroot_app_hidden_filter(hs->buf[0], buf, n);
-					if (kept > 0) { n = tawcroot_device_dirents(hs->buf[0], buf, kept); break; }
+					if (kept > 0) kept = tawcroot_device_dirents(hs->buf[0], buf, kept);
+					if (kept > 0) { n = kept; break; }
 					n = TAWC_RAW(TAWC_SYS_getdents64, fd, (long)buf, (long)count, 0, 0, 0);
 					if (n <= 0) return n;
 				}

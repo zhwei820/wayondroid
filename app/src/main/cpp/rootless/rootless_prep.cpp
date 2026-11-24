@@ -577,6 +577,11 @@ bool install_sensors_hal(const std::string& R, const std::string& lib_dir, std::
                       0644, error);
 }
 
+// TQ3A.230901.001.C2's radio and bootloader, as its factory image
+// (redfin-tq3a.230901.001.c2) names them
+constexpr const char* kBaseband = "g7250-00258-230518-B-10157620";
+constexpr const char* kBootloader = "r3-0.5-9825705";
+
 // Google's camera HAL with the emulator's sensor HWL
 // (scripts/sensors/fetch-hal.py): a back and a front camera that render a
 // test scene, configured by the JSON files (without ro.boot.qemu it reads
@@ -759,11 +764,9 @@ bool install_radio_hal(const std::string& R, const std::string& lib_dir, bool* i
                     "    user radio\n"
                     "    group radio cache inet misc audio log readproc wakelock\n"
                     "    setenv LD_PRELOAD /vendor/lib64/libril-qcril-ext.so\n"
-                    // The Pixel 5's in place of reference-ril's. Unverified on
-                    // a device: the baseband is TQ1A.230105.001's (AT&T's
-                    // update notes), not TQ3A.230901.001's
+                    // The Pixel 5's in place of reference-ril's (see kBaseband)
                     "    setenv RIL_IMPL_NAME \"Qualcomm RIL 1.0\"\n"
-                    "    setenv RIL_BASEBAND_VERSION g7250-00220-221017-B-9183951\n",
+                    "    setenv RIL_BASEBAND_VERSION " + std::string(kBaseband) + "\n",
                     0644, error) ||
         // A phone's: apps check for it before they read the SIM
         !write_mode(V + "/etc/permissions/android.hardware.telephony.gsm.xml",
@@ -898,6 +901,10 @@ bool write_device_view(const std::string& store, std::string* error) {
            write_mode(D + "/uname", "4.19.282-g8b2a6e3c1f0d-ab10577962\n#1 SMP PREEMPT Mon Jul 31 19:57:23 UTC 2023\n",
                       0644, error) &&
            write_mode(D + "/meminfo-kb", "7612308\n", 0644, error) &&
+           // The GPU drivers' sockets (see the symlinks below) are no phone's;
+           // apps open them but don't list them. /dev itself apps can't list.
+           write_mode(D + "/unlisted", "/dev/socket/gralloc\n/dev/socket/kgsl-0\n", 0644, error) &&
+           write_mode(D + "/unlistable", "/dev\n", 0644, error) &&
            // 110.5 GiB: Android reports the device's storage as the power of two above, 128 GB
            write_mode(D + "/data-bytes", "118648471552\n", 0644, error);
 }
@@ -1138,14 +1145,13 @@ DeviceIdentity guest_identity() {
     id.security_patch = "2023-09-01";
     id.soc_manufacturer = "QTI";
     id.soc_model = "SM7250";
-    // Unverified on a device: an Android 13 redfin bootloader (r3-0.5-9430389
-    // is reported with 2023 builds), the RIL's baseband, Pixels' revision form
-    id.bootloader = "r3-0.5-9430389";
-    id.baseband = "g7250-00220-221017-B-9183951";
-    id.revision = "MP1.0";
+    id.bootloader = kBootloader;
+    id.baseband = kBaseband;
+    id.revision = "MP1.0";  // Pixels' form, unverified on a device
     id.width = 1080;
     id.height = 2340;
     id.dpi = 440;
+    id.refresh_hz = 90;
     id.props = {
         // Snapdragon 765G's; Waydroid's "waydroid" otherwise. Its HALs that
         // were found by it are renamed for ro.hardware (install_device_hals)
@@ -1191,10 +1197,13 @@ DeviceIdentity guest_identity() {
         {"ro.odm.build.type", "user"},
         {"ro.odm.build.version.incremental", "10753682"},
         {"ro.product.system.brand", "google"},
-        {"ro.product.system.device", "generic"},
+        {"ro.product.system.device", "redfin"},
         {"ro.product.system.manufacturer", "Google"},
-        {"ro.product.system.model", "mainline"},
-        {"ro.product.system.name", "mainline"},
+        {"ro.product.system.model", "Pixel 5"},
+        {"ro.product.system.name", "redfin"},
+        // Launched on Android 11; Waydroid's image says 28
+        {"ro.product.first_api_level", "30"},
+        {"ro.board.first_api_level", "30"},
         {"ro.system.build.date", "Sat Sep  2 01:48:29 UTC 2023"},
         {"ro.system.build.date.utc", "1693619309"},
         {"ro.system.build.fingerprint", "google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys"},

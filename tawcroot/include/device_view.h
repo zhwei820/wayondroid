@@ -13,6 +13,8 @@
  *                  statfs(2) blocks and inodes scaled to it, for every process
  *
  *   hwcap          masks for the AT_HWCAP/AT_HWCAP2 every exec'd guest gets
+ *   unlisted       paths apps' directory listings leave out (they still open)
+ *   unlistable     directories apps may not open for reading (EACCES)
  *
  * /proc/self/auxv is the auxv the loader built, for every guest process.
  * With the directory present, apps' /proc/self/status also reads as a
@@ -36,8 +38,9 @@ size_t tawcroot_device_status(char *buf, size_t len, size_t cap);
  * the device's CPU features), for the auxv the loader builds */
 void tawcroot_device_hwcap(uint64_t *hwcap, uint64_t *hwcap2);
 
-/* An app's listing of the device's cpufreq dir: the phone's policy<n>
- * names renamed to the device's, by rank; returns n */
+/* An app's listing of `dir`: without the unlisted entries, and in the
+ * device's cpufreq dir the phone's policy<n> names renamed to the
+ * device's, by rank; returns the length kept */
 long tawcroot_device_dirents(const char *dir, char *buf, long n);
 
 /* Scales a kernel struct statfs (long[]: type, bsize, blocks, bfree,
