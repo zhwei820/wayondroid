@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.Storage
@@ -185,12 +186,24 @@ private fun ROMCard(
                 when {
                     unavailable -> {}
                     rom.isDownloaded -> {
-                        FilledTonalIconButton(onClick = {}) {
-                            Icon(
-                                Icons.Filled.CheckCircle,
-                                contentDescription = "Downloaded",
-                                tint = MaterialTheme.colorScheme.primary
+                        var confirmDelete by remember { mutableStateOf(false) }
+                        if (confirmDelete) {
+                            DeleteROMDialog(
+                                name = rom.displayName,
+                                onConfirm = {
+                                    confirmDelete = false
+                                    onDelete()
+                                },
+                                onDismiss = { confirmDelete = false },
                             )
+                        }
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = "Downloaded",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        IconButton(onClick = { confirmDelete = true }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Delete ${rom.displayName}")
                         }
                     }
                     progress?.state == ROMDownloadState.DOWNLOADING -> {}
@@ -229,6 +242,23 @@ private fun ROMCard(
             }
         }
     }
+}
+
+@Composable
+internal fun DeleteROMDialog(name: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete ROM?") },
+        text = { Text("$name will be removed from this device. Existing instances are not affected.") },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Delete", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

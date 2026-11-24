@@ -6,6 +6,7 @@ import com.hexadecinull.vineos.data.models.DownloadProgress
 import com.hexadecinull.vineos.data.models.ROMDownloadState
 import com.hexadecinull.vineos.data.models.ROMImage
 import com.hexadecinull.vineos.data.repository.ROMRepository
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -125,6 +126,36 @@ class ROMDetailViewModelTest {
         viewModel.load("id-2")
         viewModel.delete()
         coVerify { romRepo.delete(rom2) }
+    }
+
+    @Test
+    fun `a successful delete marks the state as deleted`() = runTest(testDispatcher) {
+        coEvery { romRepo.delete(rom2) } returns true
+        viewModel.load("id-2")
+        viewModel.delete()
+        val state = viewModel.uiState.first()
+        assertThat(state.deleted).isTrue()
+        assertThat(state.deleteError).isNull()
+    }
+
+    @Test
+    fun `a failed delete reports an error and keeps the rom`() = runTest(testDispatcher) {
+        coEvery { romRepo.delete(rom2) } returns false
+        viewModel.load("id-2")
+        viewModel.delete()
+        val state = viewModel.uiState.first()
+        assertThat(state.deleted).isFalse()
+        assertThat(state.deleteError).contains(rom2.displayName)
+        viewModel.clearDeleteError()
+        assertThat(viewModel.uiState.first().deleteError).isNull()
+    }
+
+    @Test
+    fun `an unknown id stops loading once the manifest fetch finishes`() = runTest(testDispatcher) {
+        viewModel.load("missing")
+        val state = viewModel.uiState.first()
+        assertThat(state.rom).isNull()
+        assertThat(state.isLoading).isFalse()
     }
 
     private fun buildRom(id: String) = ROMImage(
