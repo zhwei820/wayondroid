@@ -1198,7 +1198,8 @@ bool install_system_apps(const Layout& l, const std::string& R, std::string* err
         for (const std::string& f : wanted) {
             struct stat a {}, b {};
             if (stat((from + "/" + f).c_str(), &a) != 0 || !S_ISREG(a.st_mode)) continue;
-            if (stat((to + "/" + f).c_str(), &b) == 0 && b.st_size == a.st_size) continue;
+            // Stubs of different versions are the same size
+            if (stat((to + "/" + f).c_str(), &b) == 0 && b.st_size == a.st_size && b.st_mtime >= a.st_mtime) continue;
             if (!copy_mode(from + "/" + f, to + "/" + f, 0644, error)) return false;
         }
         chrome |= n == "Chrome" || n == "Chrome-Stub";
