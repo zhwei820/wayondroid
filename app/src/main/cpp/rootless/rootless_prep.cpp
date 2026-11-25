@@ -175,7 +175,7 @@ const char kCaptivePortalUrls[] =
 // The Bluetooth name and address a phone's settings hold, which
 // BluetoothManagerService reports while the adapter is off. Before
 // that service starts on most boots; on the first, on the next.
-// Likewise hide_error_dialogs.
+// Likewise hide_error_dialogs and Play Protect.
 std::string device_settings_sh(const std::string& bt_mac) {
     return "#!/system/bin/sh\n"
            "i=0\n"
@@ -189,7 +189,12 @@ std::string device_settings_sh(const std::string& bt_mac) {
            // boot-time "internal problem with your device" one (its VINTF
            // check fails on the guest's Waydroid vendor manifest and on the
            // kernel config apps can't read), nor crash and ANR dialogs
-           "cmd settings put global hide_error_dialogs 1\n";
+           "cmd settings put global hide_error_dialogs 1\n"
+           // Play Protect off: it blocks installing apps that target an old
+           // Android ("Unsafe app blocked"), Soda Music among them
+           "cmd settings put global package_verifier_user_consent -1\n"
+           "cmd settings put global package_verifier_enable 0\n"
+           "cmd settings put global verifier_verify_adb_installs 0\n";
 }
 
 std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb, bool clip_bridge) {
