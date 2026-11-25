@@ -2005,6 +2005,19 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
             egl_renamed = patched.find(std::string(1, '\0') + kEglDriverProp + '\0') != std::string::npos;
         }
     }
+    // Waydroid's EventHub names its pipe-fed devices itself, and apps read
+    // the names (InputDevice.getName, the descriptor's hash): a phone's
+    // instead, in place (no longer than Waydroid's). The Pixel 5's panel
+    // driver (sec_touch.ko) names it "sec_touchscreen", which doesn't fit.
+    if (!id.empty()) {
+        const std::string reader = R + "/system/lib64/libinputreader.so";
+        if (const auto so = read_file(reader)) {
+            const std::pair<const char*, const char*> kInputStrings[] = {
+                {"wayland_touch", "touchscreen"}, {"wayland_keyboard", "gpio-keys"}, {"wayland", ""}};
+            const std::string patched = replace_cstrings(*so, kInputStrings);
+            if (patched != *so && !write_mode(reader, patched, 0644, error)) return false;
+        }
+    }
     // Mobile data off by default: vine_modem fails data calls, and the
     // RIL sets its data interface down when one ends, which may be wlan0
     if (!write_mode(R + "/vendor/waydroid.prop",
