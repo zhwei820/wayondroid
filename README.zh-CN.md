@@ -16,7 +16,8 @@ LineageOS 20（Android 13）镜像。没有虚拟机，也没有内核模块：g
 底层是用户态容器运行时（**tawcroot**）和用户态 binder（**binderd**）。
 
 > **状态：alpha。** 在 Galaxy S24（Exynos 2400，Android 17，arm64-only，
-> SELinux enforcing）上开发和测试，其他手机未测试。
+> SELinux enforcing）和一加 PHK110（骁龙 8+ Gen 1，ColorOS 16 / Android 16）上开发和测试，
+> 其他手机未测试。
 > 会有不少粗糙之处，见[已知局限](#已知局限)。
 
 ## 已可用的功能
@@ -28,7 +29,10 @@ LineageOS 20（Android 13）镜像。没有虚拟机，也没有内核模块：g
 | GPU | 实验性：guest 的 Vulkan/GLES 经 gfxstream 在手机 GPU 上运行 |
 | 输入 | 多点触控、按键、文本输入。guest 画面打开时，手机音量键控制 guest |
 | 音频 | guest 声音从手机扬声器播放（为 Waydroid 音频 HAL 提供的 PulseAudio 服务端，用 AAudio 播放） |
-| 网络 | guest 通过手机的网络连接上网 |
+| 网络 | guest 通过手机的网络连接上网，在 guest 内显示为已连接的 Wi-Fi |
+| 设备身份 | guest 对 App 呈现为未插 SIM 卡的 Pixel 5（Android 13）：构建信息、屏幕（90/60 Hz）、CPU、内核版本、GPU 字符串与扩展集、`/vendor` 与挂载列表都按真机设定 |
+| 传感器 | 手机的加速度、陀螺仪、磁力、光线、距离传感器传给 guest；手机没有气压计时模拟一个；计步器由手机加速度推算 |
+| 相机 | guest 的前后摄像头显示手机摄像头的画面 |
 | 存储 | 共享存储（`/sdcard`）已挂载：文件 App、文件和照片选择器可用 |
 | Google 应用 | GAPPS 镜像可运行 Google Play 服务 |
 | 内存 | 超出实例 RAM 设置或手机内存不足时，guest 会杀掉自己的缓存 App |
@@ -82,6 +86,16 @@ HAL 和 RIL 取自 Android 13 模拟器镜像，由 `scripts/sensors/fetch-hal.p
 不跑则 guest 没有传感器，也没有 SIM 卡。RIL 还要 `scripts/radio/build-overlay.sh`（需要 SDK
 build-tools）生成的 overlay，guest 的 framework 才会用它。
 
+两个可选输入，取自 Google 的出厂镜像，不进代码库：
+
+- `scripts/rootless/stage-vendor-view.py` 读 Pixel 5 出厂镜像（与身份同一版本
+  TQ3A.230901.001.C2）的 `vendor.img`（解开后的目录），生成
+  `jniLibs` 里的清单；App 看到的 `/vendor` 列表随之与真机一致。不跑则保持 Waydroid 的 `/vendor`。
+- 放进手机上 App 数据目录 `files/system-apps/<目录>/` 的 APK，会以系统应用装进 guest 的
+  `/system/product/app/<目录>/`；有 Chrome 时替换 LineageOS 的浏览器。Pixel 5 自带的 Chrome
+  只有 32 位库，要用 64 位版本（例如 Pixel 8 出厂镜像里的 `Chrome`、`TrichromeLibrary` 及其
+  `-Stub`）。从这里删掉一个目录不会把它从已有实例里删掉。
+
 宿主测试：运行时用 `tawcroot/test.sh --host`，引擎用 `app/src/main/cpp/tests/native/`
 下的脚本（`run_rootless_tests.sh`、`run_wayland_tests.sh`、`run_display_tests.sh`、
 `run_pulse_tests.sh`）。App 单元测试：`./gradlew :app:testDebugUnitTest`。
@@ -115,7 +129,10 @@ Wayondroid app (one app uid, no root)
 
 ## 已知局限
 
-- 32 位 guest App 无法运行（guest 只有 64 位）。
+- 32 位 guest App 无法运行（guest 只有 64 位），包括 Pixel 5 自带的 32 位 Chrome。
+- 官方 Google 相机启动即崩溃（其反篡改组件不接受这个运行环境）。
+- 设备身份仍有改不掉的痕迹：App 直接读 CPU ID 寄存器得到的是手机的真实型号；GPU 渲染由
+  ANGLE 完成，时序与原生 Adreno 驱动不同；摄像头分辨率受限于手机相机流（1920×1440）。
 - GPU 加速是实验性的；App 画面异常或崩溃时请关闭。
 - App 直接写入共享存储的文件，要等下一次媒体扫描后才会出现在图库和媒体列表中
   （文件 App 会立即看到）。
