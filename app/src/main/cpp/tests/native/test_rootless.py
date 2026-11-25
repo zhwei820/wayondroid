@@ -350,7 +350,7 @@ def main():
     check("ro.build.id=TQ3A.230901.001.C2\n" in prop and "ro.build.fingerprint=" + pixel5 + "\n" in prop and
           "ro.build.version.release=13\n" in prop, "Pixel 5 build: " + prop)
     check("ro.product.board=redfin\n" in prop and "ro.soc.model=SM7250\n" in prop and
-          "ro.vendor.build.fingerprint=" + pixel5 + "\n" in prop and "ro.product.system.model=mainline\n" in prop,
+          "ro.vendor.build.fingerprint=" + pixel5 + "\n" in prop and "ro.product.system.model=Pixel 5\n" in prop,
           "Pixel 5 props the image lacks, added: " + prop)
     vprop = read(os.path.join(R, "vendor/build.prop"))
     check("ro.vendor.product.cpu.abilist=arm64-v8a\n" in vprop and "ro.board.platform=lito\n" in vprop, "vendor props: " + vprop)
@@ -384,9 +384,9 @@ def main():
     check("mount none /data/media /mnt/user/0/emulated bind rec\n" in rc, "storage binds")
     check(read(os.path.join(R, "vendor/lib64/hw/gralloc.default.so")) == "gralloc\n" and
           read(os.path.join(R, "vendor/lib64/hw/gralloc.default_real.so")) == "default gralloc\n", "gralloc shim installed")
-    check("ro.sf.lcd_density=240" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density")
+    check("ro.sf.lcd_density=440" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density")
     check(os.access(os.path.join(R, "vendor/bin/hw/android.hardware.sensors@2.1-service.multihal"), os.X_OK) and
-          read(os.path.join(R, "vendor/lib64/hw/sensors.ssc.so")) == "sensors ranchu\0TMD3719 Ambient Light\0x\n" and
+          read(os.path.join(R, "vendor/lib64/hw/sensors.ssc.so")) == "sensors ranchu\0TCS3701 Ambient Light\0x\n" and
           read(os.path.join(R, "vendor/lib64/android.hardware.sensors@2.0-ScopedWakelock.so")) == "sensors wakelock\n" and
           read(os.path.join(R, "vendor/lib64/libsensorssc_ext.so")) == "sensors shim\n", "sensors HAL installed, a Pixel's names")
     check(read(os.path.join(R, "vendor/lib64/android.hardware.sensors@2.1.so")) == "image sensors 2.1\n" and
@@ -420,7 +420,7 @@ def main():
     check("telephony.active_modems.max_count=2\n" in read(os.path.join(R, "vendor/waydroid.prop")), "two supported modems")
     seed = read(os.path.join(W, "device.seed")).strip()
     check(re.fullmatch(r"[0-9a-f]{32}", seed) is not None, "device seed: " + seed)
-    check(re.fullmatch(r"androidboot\.hardware=redfin androidboot\.serialno=0[9AB]\d\d1FDD400\d[0-9A-Z]{2} .*\n",
+    check(re.fullmatch(r"androidboot\.hardware=redfin .*androidboot\.serialno=0[9AB]\d\d1FDD400\d[0-9A-Z]{2} .*\n",
                        read(os.path.join(W, "tawcroot/cmdline"))) is not None, "serial on the cmdline: " + read(os.path.join(W, "tawcroot/cmdline")))
     mac = read(os.path.join(W, "tawcroot/mac"))
     check(re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}\n", mac) is not None and int(mac[:2], 16) & 3 == 2, "wlan0 MAC: " + mac)
@@ -449,7 +449,7 @@ def main():
     check("service statsd" in rc, "statsd disabled")
     sys_init = os.listdir(os.path.join(R, "system/etc/init"))
     check("mediaserver.rc" not in sys_init and "init64.rc" in sys_init, "32-bit system service dropped: " + str(sys_init))
-    check("--create 640x480" in read(os.path.join(W, "wl-args.txt")), "display size")
+    check("--create 1080x2340" in read(os.path.join(W, "wl-args.txt")), "display size")
     check("--refresh 90" in read(os.path.join(W, "wl-args.txt")), "frame rate")
     check(os.path.isfile(os.path.join(inst, "shared/vinefb")), "vinefb created")
     check("/system/bin" in read(os.path.join(W, "init-env.txt")), "init gets the guest PATH")
@@ -532,9 +532,16 @@ def main():
     inst64 = os.path.join(base, name64)
     os.makedirs(inst64)
     build_images(top, inst64, audio_hal_class=2, sensors_libs=False, radio_libs=False)
+    with open(os.path.join(inst64, "manifest.json"), "w") as f:
+        f.write('{"kind": "waydroid", "identity": "grapheneos"}\n')
     ok, text = h.call("start", name64, inst64)
     check(ok and h.wait_state(name64, "running") is not None, "64-bit image boots: " + text)
     R64 = os.path.join(inst64, "rootless/rootfs")
+    prop64 = read(os.path.join(R64, "system/build.prop"))
+    check("ro.build.fingerprint=google/redfin/redfin:13/TQ3A.230901.001/2023100300:user/release-keys\n" in prop64 and
+          "ro.build.display.id=TQ3A.230901.001.2023100300\n" in prop64 and "ro.build.host=grapheneos\n" in prop64,
+          "GrapheneOS build: " + prop64)
+    check("androidboot.verifiedbootstate=yellow " in read(os.path.join(inst64, "rootless/tawcroot/cmdline")), "GrapheneOS boot state")
     check(not os.path.exists(os.path.join(R64, "vendor/bin/hw/vine_hal_service")), "no own audio HAL")
     check("vine_hal_service" not in read(os.path.join(R64, "system/product/etc/init/vine-rootless.rc")), "rc keeps the image's")
     check(not os.path.exists(os.path.join(R64, "vendor/etc/init/android.hardware.sensors@2.1-service-multihal.rc")), "no sensors HAL without the image's libraries")

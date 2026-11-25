@@ -1125,7 +1125,7 @@ bool apply_device_features(const std::string& R, bool camera, std::string* error
         if (at != std::string::npos && !write_mode(R + f, text->substr(0, at) + text->substr(at + strlen(line)), 0644, error))
             return false;
     }
-    return is_directory(P) &&
+    return mkdirs_or_fail(P, error) &&
            write_mode(P + "/android.hardware.bluetooth_le.xml",
                       "<permissions>\n    <feature name=\"android.hardware.bluetooth_le\" />\n</permissions>\n", 0644, error);
 }
