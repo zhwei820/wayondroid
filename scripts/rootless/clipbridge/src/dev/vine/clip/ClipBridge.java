@@ -7,6 +7,7 @@ import android.net.LocalSocketAddress;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Parcel;
+import android.os.PersistableBundle;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -81,7 +82,12 @@ public final class ClipBridge {
 
     private void write(String text) {
         try {
-            set.invoke(clipboard, args(set, ClipData.newPlainText("vine", text)));
+            ClipData clip = ClipData.newPlainText("vine", text);
+            // SystemUI shows no clipboard overlay (share / edit) for a clip of com.android.shell that asks it not to
+            PersistableBundle extras = new PersistableBundle();
+            extras.putBoolean("com.android.systemui.SUPPRESS_CLIPBOARD_OVERLAY", true);
+            clip.getDescription().setExtras(extras);
+            set.invoke(clipboard, args(set, clip));
         } catch (Exception e) {
             System.err.println("vine-clip: write: " + e);
         }

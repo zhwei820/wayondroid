@@ -152,6 +152,36 @@ const char kCheckDisplay[] =
     "log -p w -t vine \"display HAL not registered in 20 s, killing hwcomposer $pid\"\n"
     "kill -9 $pid\n";
 
+// Keeps the guest's FlClash running, proxy only (no tun in the guest):
+// started whenever nothing listens on its mixed port. FlClash's START is
+// a transparent activity, which takes focus for a moment, so a FlClash
+// that won't start (its VPN left on) is retried every 5 minutes after 3
+// tries. Exempt from Doze, app standby and background restrictions, so
+// the system leaves it running (vine_lmkd spares it: its foreground
+// service keeps it at perceptible adj).
+const char kProxyKeeper[] =
+    "#!/system/bin/sh\n"
+    "pkg=com.follow.clash\n"
+    "fails=0\n"
+    "while :; do\n"
+    "    if pm path $pkg >/dev/null 2>&1; then\n"
+    "        if [ -z \"$exempt\" ] && cmd deviceidle whitelist +$pkg >/dev/null 2>&1; then\n"
+    "            am set-standby-bucket $pkg active\n"
+    "            cmd appops set $pkg RUN_IN_BACKGROUND allow\n"
+    "            cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow\n"
+    "            exempt=1\n"
+    "        fi\n"
+    "        if echo | toybox nc -w 2 127.0.0.1 7890 >/dev/null 2>&1; then\n"
+    "            fails=0\n"
+    "        else\n"
+    "            fails=$((fails + 1))\n"
+    "            log -p i -t vine \"FlClash not listening on 7890, starting it (try $fails)\"\n"
+    "            am start -a $pkg.action.START -p $pkg >/dev/null 2>&1\n"
+    "        fi\n"
+    "    fi\n"
+    "    if [ $fails -ge 3 ]; then sleep 300; else sleep 30; fi\n"
+    "done\n";
+
 // Network validation probes Google by default, unreachable from where
 // many phones are: wlan0 stays PARTIAL_CONNECTIVITY, never VALIDATED, and
 // DownloadManager's jobs (which need a validated network) wait forever.
@@ -175,7 +205,7 @@ const char kCaptivePortalUrls[] =
 // The Bluetooth name and address a phone's settings hold, which
 // BluetoothManagerService reports while the adapter is off. Before
 // that service starts on most boots; on the first, on the next.
-// Likewise hide_error_dialogs and Play Protect.
+// Likewise hide_error_dialogs, Play Protect and the clipboard overlay.
 std::string device_settings_sh(const std::string& bt_mac) {
     return "#!/system/bin/sh\n"
            "i=0\n"
@@ -194,7 +224,9 @@ std::string device_settings_sh(const std::string& bt_mac) {
            // Android ("Unsafe app blocked"), Soda Music among them
            "cmd settings put global package_verifier_user_consent -1\n"
            "cmd settings put global package_verifier_enable 0\n"
-           "cmd settings put global verifier_verify_adb_installs 0\n";
+           "cmd settings put global verifier_verify_adb_installs 0\n"
+           // No clipboard overlay (preview with share / edit) on every copy
+           "cmd device_config put systemui clipboard_overlay_enabled false\n";
 }
 
 std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb, bool clip_bridge) {
@@ -252,6 +284,14 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb, bool clip_brid
         // The engine's boot signal, in its /run/user/1000
         "on property:sys.boot_completed=1\n"
         "    write /run/user/1000/boot_completed 1\n"
+        "    start vine_proxy_keeper\n"
+        "\n"
+        // see kProxyKeeper
+        "service vine_proxy_keeper /system/bin/sh /product/etc/vine/proxy_keeper.sh\n"
+        "    user root\n"
+        "    group root\n"
+        "    seclabel u:r:su:s0\n"
+        "    disabled\n"
         "\n"
         // see kCaptivePortalUrls
         "on property:init.svc.zygote=running\n"
@@ -663,9 +703,6 @@ const char* const kCameraSystemLibs[] = {
     "android.hardware.camera.metadata@3.6.so",
 };
 
-// The HAL's configurations: apps have no use for them, and the names say emulator
-const char* const kCameraHidden[] = {"/vendor/etc/config/emu_camera_back.json", "/vendor/etc/config/emu_camera_front.json"};
-
 // What the cameras support, in AOSP's feature files under their names (a
 // Pixel's /vendor/etc/permissions has the same four)
 const std::pair<const char*, const char*> kCameraFeatures[] = {
@@ -869,8 +906,6 @@ bool patch_health_hal(const std::string& R, std::string* error) {
 // another name finds no GLES library and every GL process crashes.
 // egl_shim.c takes the EGL library's name in turn (it hides multisampled
 // window configs from apps); ANGLE's moves to eglSubDriverAndroid.so.
-const char* const kAngleHidden[] = {"/vendor/lib64/egl/libEGL_mesa.so", "/vendor/lib64/egl/libGLESv1_CM_mesa.so",
-                                    "/vendor/lib64/egl/libGLESv2_mesa.so"};
 
 // ANGLE caps GLES at 3.1, and leaves out the geometry and tessellation
 // shader extensions 3.2 needs, unless its exposeNonConformantExtensionsAndVersions
@@ -1248,175 +1283,15 @@ bool install_system_apps(const Layout& l, const std::string& R, std::string* err
     return true;
 }
 
-// A Pixel 5's /vendor as apps list it (scripts/rootless/stage-vendor-view.py
-// stages its names): placeholders where the guest lacks a name, sparse
-// zeros or commented-out init scripts, and the guest's own names in those
-// directories added to `hidden` (apps see them as absent). Never made: names
-// a lookup would take over the guest's own (hw_get_module's variants, HIDL
-// passthrough's -impl prefixes, prep's checks below), and lib64/egl.
-// lib64 and lib only gain names: apps load libraries from there. Nor a
-// name the guest has elsewhere: vendor processes search /vendor/lib64
-// before the system's and VNDK's libraries, so a placeholder would shadow
-// one (SurfaceFlinger's EGL driver then fails to load). A placeholder on a
-// path that is no longer to have one is removed.
-std::string base64_decode(const std::string& in) {
-    std::string out;
-    uint32_t acc = 0;
-    int bits = 0;
-    for (char c : in) {
-        int v = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26 : c >= '0' && c <= '9' ? c - '0' + 52
-                : c == '+' ? 62 : c == '/' ? 63 : -1;
-        if (v < 0) continue;
-        acc = acc << 6 | static_cast<uint32_t>(v);
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out += static_cast<char>((acc >> bits) & 0xff);
-        }
-    }
-    return out;
-}
-
-bool vendor_view_skips(const std::string& path) {
-    static const char* const kExact[] = {
-        "/vendor/lib64/egl",
-        "/vendor/lib64/hw/sensors.redfin.so",
-        "/vendor/lib64/hw/camera.lito.so",
-        "/vendor/lib64/hw/bootctrl.lito.so",
-        "/vendor/lib64/hw/lights.lito.so",
-        "/vendor/lib64/hw/sound_trigger.primary.lito.so",
-        "/vendor/bin/hw/android.hardware.media.omx@1.0-service",
-        "/vendor/lib64/libstagefrighthw.so",
-        "/vendor/lib64/libOmxCore.so",
-    };
-    for (const char* e : kExact)
-        if (path == e) return true;
-    for (const char* prefix : {"/vendor/lib64/hw/gralloc.", "/vendor/lib64/hw/android.hardware.graphics.mapper@",
-                               "/vendor/lib64/hw/android.hardware.gatekeeper@",
-                               "/vendor/lib64/hw/android.hardware.memtrack@"})
-        if (path.rfind(prefix, 0) == 0) return true;
-    return false;
-}
-
-void library_names(const std::string& dir, std::set<std::string>* out) {
-    DIR* d = opendir(dir.c_str());
-    if (!d) return;
-    while (dirent* e = readdir(d)) {
-        const std::string n = e->d_name;
-        if (n.size() > 3 && n.compare(n.size() - 3, 3, ".so") == 0) out->insert(n);
-    }
-    closedir(d);
-}
-
-// A sparse file of zeros, as install_vendor_view makes
-bool vendor_placeholder(const std::string& path) {
-    struct stat st {};
-    if (lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size == 0 || st.st_blocks != 0) return false;
-    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return false;
-    char head[64] = {};
-    const ssize_t n = read(fd, head, sizeof head);
-    close(fd);
-    return n > 0 && std::all_of(head, head + n, [](char c) { return c == 0; });
-}
-
-bool install_vendor_view(const std::string& R, const std::string& lib_dir, std::string* hidden, std::string* error) {
-    const auto manifest = read_file(lib_dir + "/libvine_vendor_view.so");
-    if (!manifest) return true;
-    std::set<std::string> guest_libs;
-    for (const char* d : {"/system/lib64", "/system/system_ext/lib64", "/system/product/lib64"})
-        library_names(R + d, &guest_libs);
-    if (DIR* d = opendir((R + "/system/apex").c_str())) {
-        while (dirent* e = readdir(d))
-            if (e->d_name[0] != '.') library_names(R + "/system/apex/" + e->d_name + "/lib64", &guest_libs);
-        closedir(d);
-    }
-    // The guest's own vendor libraries in subdirectories (egl, hw, dri, ...)
-    if (DIR* d = opendir((R + "/vendor/lib64").c_str())) {
-        while (dirent* e = readdir(d))
-            if (e->d_name[0] != '.' && e->d_type == DT_DIR) library_names(R + "/vendor/lib64/" + e->d_name, &guest_libs);
-        closedir(d);
-    }
-    std::set<std::string> listed;
-    size_t at = 0;
-    while (at < manifest->size()) {
-        size_t end = manifest->find('\n', at);
-        if (end == std::string::npos) end = manifest->size();
-        const std::string line = manifest->substr(at, end - at);
-        at = end + 1;
-        if (line.size() < 3 || line[1] != ' ') continue;
-        const char kind = line[0];
-        size_t sp = line.find(' ', 2);
-        const std::string path = line.substr(2, sp == std::string::npos ? std::string::npos : sp - 2);
-        if (path.rfind("/vendor/", 0) != 0 || path.find("..") != std::string::npos) continue;
-        listed.insert(path);
-        const std::string full = R + path;
-        const bool shadows = path.rfind("/vendor/lib64/", 0) == 0 && path.find('/', 14) == std::string::npos &&
-                             guest_libs.count(path.substr(14));
-        if (vendor_view_skips(path) || shadows) {
-            if (vendor_placeholder(full) && unlink(full.c_str()) != 0) return fail_errno(error, "unlink " + full);
-            continue;
-        }
-        struct stat st {};
-        if (lstat(full.c_str(), &st) == 0) continue;
-        if (kind == 'd') {
-            if (!mkdirs_or_fail(full, error)) return false;
-            continue;
-        }
-        const std::string rest = sp == std::string::npos ? "" : line.substr(sp + 1);
-        if (kind == 'f') {
-            unsigned long long size = 0;
-            unsigned mode = 0644;
-            if (sscanf(rest.c_str(), "%llu %o", &size, &mode) < 1) continue;
-            const int fd = open(full.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode & 0777);
-            if (fd < 0) return fail_errno(error, "create " + full);
-            const bool ok = ftruncate(fd, static_cast<off_t>(size)) == 0;
-            close(fd);
-            if (!ok) return fail_errno(error, "truncate " + full);
-        } else if (kind == 't') {
-            const size_t sp2 = rest.find(' ');
-            if (sp2 == std::string::npos) continue;
-            const unsigned mode = static_cast<unsigned>(strtoul(rest.substr(0, sp2).c_str(), nullptr, 8));
-            if (!write_mode(full, base64_decode(rest.substr(sp2 + 1)), mode & 0777, error)) return false;
-        }
-    }
-    if (listed.empty()) return true;
-    // The guest's own names apps would see in a Pixel 5's place
-    static const char* const kAppsLoad[] = {"android.hardware.graphics.mapper@2.0-impl-2.1.so", "gralloc.default.so",
-                                            "gralloc.default_real.so", "gralloc.redfin.so", "vulkan.adreno.so"};
-    for (const char* dir : {"/vendor", "/vendor/etc/init", "/vendor/etc/permissions", "/vendor/etc/vintf/manifest",
-                            "/vendor/bin/hw", "/vendor/lib64/hw"}) {
-        DIR* d = opendir((R + dir).c_str());
-        if (!d) continue;
-        while (dirent* e = readdir(d)) {
-            const std::string name = e->d_name;
-            if (name == "." || name == ".." || listed.count(std::string(dir) + "/" + name)) continue;
-            if (std::string(dir) == "/vendor/lib64/hw" &&
-                std::any_of(std::begin(kAppsLoad), std::end(kAppsLoad), [&](const char* k) { return name == k; }))
-                continue;
-            *hidden += std::string(dir) + "/" + name + "\n";
-        }
-        closedir(d);
-    }
-    return true;
-}
-
-// Files and directories that name Waydroid, LineageOS, the emulator or
-// the engine: tawcroot's <store>/app-hidden (tawcroot/include/app_hidden.h),
-// which apps see as absent. Kept visible: installed apps, overlays and
-// APEXes. The marked libraries only services load; Lineage's framework
-// resources apps inherit mapped from zygote (tawcroot leaves the mapping
-// out of their /proc/self/maps).
-bool marked_name(const std::string& name) {
+// tawcroot's <store>/app-hidden (tawcroot/include/app_hidden.h), which
+// apps see as absent. Only Waydroid's gralloc 4 (minigbm/gbm_mesa), unused
+// (gralloc.redfin is gralloc 2): hidden, apps' libui finds no mapper 4 and
+// takes gralloc 2's. Kept short: tawcroot scans it on every path an app
+// process resolves.
+bool hidden_name(const std::string& name) {
     std::string n = name;
     for (char& c : n) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-    // minigbm/gbm_mesa: Waydroid's gralloc 4, unused (gralloc.redfin is
-    // gralloc 2); hidden, apps' libui finds no mapper 4 and takes gralloc 2's
-    for (const char* m : {"waydroid", "lineage", "vine", "goldfish", "ranchu", "cuttlefish", "gfxstream", "anbox", "qemu",
-                          "virtio", "reference-ril", "minigbm", "gbm_mesa"}) {
-        if (n.find(m) != std::string::npos) return true;
-    }
-    return false;
+    return n.find("minigbm") != std::string::npos || n.find("gbm_mesa") != std::string::npos;
 }
 
 void collect_hidden(const std::string& R, const std::string& dir, int depth, std::vector<std::string>* out) {
@@ -1430,9 +1305,9 @@ void collect_hidden(const std::string& R, const std::string& dir, int depth, std
         if (lstat((R + path).c_str(), &st) != 0) continue;
         if (S_ISDIR(st.st_mode)) {
             if (name == "app" || name == "priv-app" || name == "overlay" || name == "apex") continue;
-            if (marked_name(name)) out->push_back(path);
+            if (hidden_name(name)) out->push_back(path);
             else if (depth < 6) collect_hidden(R, path, depth + 1, out);
-        } else if (marked_name(name)) {
+        } else if (hidden_name(name)) {
             out->push_back(path);
         }
     }
@@ -1441,76 +1316,32 @@ void collect_hidden(const std::string& R, const std::string& dir, int depth, std
 
 std::string app_hidden_list(const std::string& R) {
     std::vector<std::string> paths;
-    collect_hidden(R, "/system", 0, &paths);
     collect_hidden(R, "/vendor", 0, &paths);
-    // The engine's own: tawcroot's port table and its runtime directory
-    std::string out = "/.tawcroot-tcp-v1\n/run\n";
-    for (const std::string& p : paths) {
-        out += p + "\n";
-        // $R/product and $R/system_ext are symlinks into system
-        for (const char* part : {"/system/product/", "/system/system_ext/"}) {
-            if (p.rfind(part, 0) == 0) out += p.substr(7) + "\n";
-        }
-    }
+    std::string out;
+    for (const std::string& p : paths) out += p + "\n";
     return out;
 }
 
-// The guest's jars that scripts/rootless/pmpatch patches (Main.java says
-// how), on the host's ART: services.jar, so that apps do not see LineageOS's
-// packages, service-connectivity.jar, so that the network is a Wi-Fi
-// network, and service-wifi.jar, so that WifiManager reports it. The jar as
-// extracted is kept as <store>/original-<name> and patched from there, so a
-// new patcher replaces the old one's work; <store>/patched-<name> records
-// which jar (size and mtime) and patcher (a hash: libraries an APK installs
-// all have the same mtime) the jar in the rootfs comes from.
-// Without the patcher or ART, or on a jar it does not know, the guest boots
-// it unpatched. A patched jar's odex no longer matches; ART runs the dex.
-const char* const kPatchedJars[] = {
+// Jars an earlier engine patched (a jar patcher that faked Wi-Fi and hid
+// LineageOS's packages): it kept each as extracted in <store>/original-<name>.
+// Put back, so that system_server runs them from their odex again.
+const char* const kFormerlyPatchedJars[] = {
     "/system/framework/services.jar",
     "/system/apex/com.android.tethering/javalib/service-connectivity.jar",
     "/system/apex/com.android.wifi/javalib/service-wifi.jar",
 };
 
-std::string stat_mark(const std::string& path) {
-    struct stat st {};
-    return stat(path.c_str(), &st) == 0 ? std::to_string(st.st_size) + " " + std::to_string(st.st_mtime) : "";
-}
-
-bool patch_guest_jar(const Layout& l, const std::string& lib_dir, const std::string& path, std::string* error) {
-    const std::string patcher = lib_dir + "/libvine_pm_patch.so";
-    const char* const vm = "/apex/com.android.art/bin/dalvikvm64";
+bool restore_guest_jar(const Layout& l, const std::string& path, std::string* error) {
     const std::string name = path.substr(path.rfind('/') + 1);
-    const std::string jar = l.rootfs + path, out = jar + ".vine";
+    const std::string jar = l.rootfs + path, tmp = jar + ".vine";
     const std::string stamp = l.store + "/patched-" + name, original = l.store + "/original-" + name;
-    if (!is_regular_file(patcher) || access(vm, X_OK) != 0 || stat_mark(jar).empty()) return true;
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (unsigned char c : read_file(patcher).value_or("")) h = (h ^ c) * 0x100000001b3ull;
-    const std::string patcher_hash = std::to_string(h);
-    const auto mark = [&]() { return stat_mark(jar) + " " + patcher_hash + "\n"; };
-    if (read_file(stamp).value_or("") == mark()) return true;
-    // No stamp: the jar is as extracted. A stamp without the original is an
-    // earlier engine's, which patched in place: the patcher takes its jar.
-    if (!is_regular_file(original) && !is_regular_file(stamp) && !copy_mode(jar, original, 0644, error)) return false;
-    const std::string from = is_regular_file(original) ? original : jar;
-    unlink(out.c_str());
-    const pid_t pid = fork();
-    if (pid == 0) {
-        execl(vm, vm, "-Xmx1g", "-cp", patcher.c_str(), "dev.vine.pmpatch.Main", from.c_str(), out.c_str(),
-              static_cast<char*>(nullptr));
-        _exit(127);
+    if (is_regular_file(original)) {
+        if (!copy_mode(original, tmp, 0644, error)) return false;
+        if (rename(tmp.c_str(), jar.c_str()) != 0) return fail_errno(error, "restore " + jar);
+        unlink(original.c_str());
     }
-    int st = 0;
-    if (pid < 0 || waitpid(pid, &st, 0) != pid) return fail_errno(error, "run the jar patcher");
-    const int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-    if (code == 0 && (chmod(out.c_str(), 0644) != 0 || rename(out.c_str(), jar.c_str()) != 0))
-        return fail_errno(error, "replace " + jar);
-    unlink(out.c_str());
-    // 2: already patched, or not a jar it knows; anything else is retried next boot
-    if (code != 0 && code != 2) {
-        fprintf(stderr, "patching %s failed (status %d); booting it unpatched\n", path.c_str(), code);
-        return true;
-    }
-    return write_mode(stamp, mark(), 0644, error);
+    unlink(stamp.c_str());
+    return true;
 }
 
 // Properties that name LineageOS or Waydroid, in vendor_default_prop:
@@ -1583,10 +1414,6 @@ DeviceIdentity guest_identity() {
     id.bootloader = kBootloader;
     id.baseband = kBaseband;
     id.revision = "MP1.0";  // Pixels' form, unverified on a device
-    id.width = 1080;
-    id.height = 2340;
-    id.dpi = 440;
-    id.refresh_hz = 90;
     id.props = {
         // Snapdragon 765G's; Waydroid's "waydroid" otherwise. Its HALs that
         // were found by it are renamed for ro.hardware (install_device_hals)
@@ -1987,7 +1814,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
              !write_mode(vold_rc, with_service_option(*text, "vold", "setenv LD_PRELOAD /system/lib64/libvine_vold_shim.so"), 0644, error)))
             return false;
     }
-    // A Pixel 5's two display modes over the hwcomposer's one; Waydroid's
+    // The phone's touch pressure and contact size (hwc_shim.c); Waydroid's
     // init.waydroid.rc overrides the vendor rc's service
     if (is_regular_file(o.lib_dir + "/libvine_hwc_shim.so")) {
         if (!copy_mode(o.lib_dir + "/libvine_hwc_shim.so", R + "/vendor/lib64/libhwcomposer_ext.so", 0644, error))
@@ -2024,6 +1851,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     const std::string product_vine = R + "/system/product/etc/vine";
     if (!mkdirs_or_fail(product_vine, error) || !write_mode(product_vine + "/reap_orphans.sh", kReapOrphans, 0755, error) ||
         !write_mode(product_vine + "/check_display.sh", kCheckDisplay, 0755, error) ||
+        !write_mode(product_vine + "/proxy_keeper.sh", kProxyKeeper, 0755, error) ||
         !write_mode(product_vine + "/captive_portal_urls.sh", kCaptivePortalUrls, 0755, error) ||
         !write_mode(product_vine + "/device_settings.sh", device_settings_sh(ids.bt_mac), 0755, error))
         return false;
@@ -2047,7 +1875,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // The Pixel 5's vendor build.prop allows two active modems (SIM + eSIM,
     // getSupportedModemCount); active stays 1, as no multisim config is set
     if (!write_mode(R + "/vendor/waydroid.prop",
-                    waydroid_prop(id.dpi ? id.dpi : o.dpi, o.gpu, egl_renamed) +
+                    waydroid_prop(o.dpi, o.gpu, egl_renamed) +
                         (radio ? "ro.com.android.mobiledata=false\n" : "") +
                         (radio && !id.empty() ? "telephony.active_modems.max_count=2\n" : ""),
                     0644, error))
@@ -2081,12 +1909,6 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     bool camera = false;
     if (!install_camera_hal(R, o.lib_dir, &camera, error)) return false;
     if (!install_gles_shim(R, o.lib_dir, error)) return false;
-    std::string extra_hidden;
-    if (o.gpu) {
-        for (const char* f : kAngleHidden) extra_hidden += std::string(f) + "\n";
-    }
-    if (camera)
-        for (const char* f : kCameraHidden) extra_hidden += std::string(f) + "\n";
     if (!id.empty() && !apply_device_features(R, camera, error)) return false;
     if (!id.empty() && !relax_framework_matrix(R, error)) return false;
     if (!patch_health_hal(R, error)) return false;
@@ -2096,10 +1918,9 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!mkdirs_or_fail(l.work + "/power_supply", error) || chmod((l.work + "/power_supply").c_str(), 0755) != 0)
         return fail_errno(error, "chmod power_supply");
     if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) || !install_system_apps(l, R, error) ||
-        (!id.empty() && !install_vendor_view(R, o.lib_dir, &extra_hidden, error)) ||
-        !write_mode(l.store + "/app-hidden", app_hidden_list(R) + extra_hidden, 0644, error) ||
-        !std::all_of(std::begin(kPatchedJars), std::end(kPatchedJars),
-                     [&](const char* jar) { return patch_guest_jar(l, o.lib_dir, jar, error); }))
+        !write_mode(l.store + "/app-hidden", app_hidden_list(R), 0644, error) ||
+        !std::all_of(std::begin(kFormerlyPatchedJars), std::end(kFormerlyPatchedJars),
+                     [&](const char* jar) { return restore_guest_jar(l, jar, error); }))
         return false;
     // scripts/radio/build-overlay.sh: EthernetTracker takes tawcroot's wlan0
     // and reports it as Wi-Fi, which is how a phone without a SIM is online.

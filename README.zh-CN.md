@@ -86,15 +86,10 @@ HAL 和 RIL 取自 Android 13 模拟器镜像，由 `scripts/sensors/fetch-hal.p
 不跑则 guest 没有传感器，也没有 SIM 卡。RIL 还要 `scripts/radio/build-overlay.sh`（需要 SDK
 build-tools）生成的 overlay，guest 的 framework 才会用它。
 
-两个可选输入，取自 Google 的出厂镜像，不进代码库：
-
-- `scripts/rootless/stage-vendor-view.py` 读 Pixel 5 出厂镜像（与身份同一版本
-  TQ3A.230901.001.C2）的 `vendor.img`（解开后的目录），生成
-  `jniLibs` 里的清单；App 看到的 `/vendor` 列表随之与真机一致。不跑则保持 Waydroid 的 `/vendor`。
-- 放进手机上 App 数据目录 `files/system-apps/<目录>/` 的 APK，会以系统应用装进 guest 的
-  `/system/product/app/<目录>/`；有 Chrome 时替换 LineageOS 的浏览器。Pixel 5 自带的 Chrome
-  只有 32 位库，要用 64 位版本（例如 Pixel 8 出厂镜像里的 `Chrome`、`TrichromeLibrary` 及其
-  `-Stub`）。从这里删掉一个目录不会把它从已有实例里删掉。
+一个可选输入，不进代码库：放进手机上 App 数据目录 `files/system-apps/<目录>/` 的 APK，会以系统应用装进 guest 的
+`/system/product/app/<目录>/`；有 Chrome 时替换 LineageOS 的浏览器。Pixel 5 自带的 Chrome
+只有 32 位库，要用 64 位版本（例如 Pixel 8 出厂镜像里的 `Chrome`、`TrichromeLibrary` 及其
+`-Stub`）。从这里删掉一个目录不会把它从已有实例里删掉。
 
 宿主测试：运行时用 `tawcroot/test.sh --host`，引擎用 `app/src/main/cpp/tests/native/`
 下的脚本（`run_rootless_tests.sh`、`run_wayland_tests.sh`、`run_display_tests.sh`、

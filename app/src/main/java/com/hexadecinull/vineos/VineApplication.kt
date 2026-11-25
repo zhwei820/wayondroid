@@ -4,13 +4,18 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import com.hexadecinull.vineos.domain.StarterApps
 import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
 @HiltAndroidApp
 class VineApplication : Application() {
+    @Inject lateinit var starterApps: StarterApps
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        starterApps.start()
     }
 
     private fun createNotificationChannels() {

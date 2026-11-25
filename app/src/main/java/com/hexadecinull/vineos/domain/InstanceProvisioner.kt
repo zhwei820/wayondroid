@@ -65,6 +65,7 @@ class InstanceProvisioner @Inject constructor(@ApplicationContext private val co
                     if (!dir.mkdirs()) throw IOException("Could not create the instance folder")
 
                     File(dir, MANIFEST).writeText(manifestText)
+                    File(dir, STARTER_APPS_PENDING).createNewFile()
                     var done = 0L
                     var lastReport = 0L
                     for ((name, entry) in wanted) {
@@ -111,6 +112,8 @@ class InstanceProvisioner @Inject constructor(@ApplicationContext private val co
 
     companion object {
         const val MANIFEST = "manifest.json"
+        // See StarterApps
+        const val STARTER_APPS_PENDING = "starter_apps.pending"
         private val PAYLOAD = listOf("ramdisk.img", "vendor.img", "system.img")
         private const val BUFFER = 256 * 1024
         private const val REPORT_STEP = 4L * 1024 * 1024

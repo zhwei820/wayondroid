@@ -54,8 +54,6 @@ struct DeviceIdentity {
     std::string date, date_utc, security_patch, soc_manufacturer, soc_model;
     // androidboot.* the bootloader passes: ro.bootloader, ro.baseband, ro.revision
     std::string bootloader, baseband, revision;
-    // The panel: the guest's screen is this size whatever the phone's
-    int width = 0, height = 0, dpi = 0, refresh_hz = 0;
     // The device's own build.prop lines, exact; they win over the fields
     std::vector<std::pair<std::string, std::string>> props;
     bool empty() const { return brand.empty() || model.empty() || device.empty(); }

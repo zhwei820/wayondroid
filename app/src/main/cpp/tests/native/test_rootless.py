@@ -357,11 +357,9 @@ def main():
     check(read(os.path.join(R, "vendor/lib64/hw/hwcomposer.redfin.so")) == "hwc\n" and
           not os.path.exists(os.path.join(R, "vendor/lib64/hw/hwcomposer.waydroid.so")), "HAL found by ro.hardware")
     check(not os.path.exists(os.path.join(R, "system/product/app/Etar")), "Lineage apps removed")
-    hidden = read(os.path.join(W, "tawcroot/app-hidden")).split("\n")
-    check("/system/etc/init/init.waydroid.rc" in hidden and "/system/product/etc/vine" in hidden and
-          "/product/etc/vine" in hidden and "/.tawcroot-tcp-v1" in hidden and "/run" in hidden and
-          "/vendor/lib64/hw/hwcomposer.redfin.so" not in hidden and
-          not any("Jelly" in p for p in hidden), "Waydroid's files hidden from apps: " + str(hidden))
+    hidden = [p for p in read(os.path.join(W, "tawcroot/app-hidden")).split("\n") if p]
+    check(all("minigbm" in p.lower() or "gbm_mesa" in p.lower() for p in hidden),
+          "only Waydroid's gralloc 4 hidden from apps: " + str(hidden))
     ctx = read(os.path.join(R, "vendor/etc/selinux/vendor_property_contexts"))
     check(ctx.startswith("ro.hardware. ") and ctx.count("\nwaydroid. ") == 1 and "\nro.lineage. " in ctx and
           ctx.count("\nvendor.display.enable_gpu_buffers ") == 1, "Waydroid and Lineage props hidden from apps: " + ctx)
@@ -384,7 +382,7 @@ def main():
     check("mount none /data/media /mnt/user/0/emulated bind rec\n" in rc, "storage binds")
     check(read(os.path.join(R, "vendor/lib64/hw/gralloc.default.so")) == "gralloc\n" and
           read(os.path.join(R, "vendor/lib64/hw/gralloc.default_real.so")) == "default gralloc\n", "gralloc shim installed")
-    check("ro.sf.lcd_density=440" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density")
+    check("ro.sf.lcd_density=240" in read(os.path.join(R, "vendor/waydroid.prop")), "waydroid.prop density from the start request")
     check(os.access(os.path.join(R, "vendor/bin/hw/android.hardware.sensors@2.1-service.multihal"), os.X_OK) and
           read(os.path.join(R, "vendor/lib64/hw/sensors.ssc.so")) == "sensors ranchu\0TCS3701 Ambient Light\0x\n" and
           read(os.path.join(R, "vendor/lib64/android.hardware.sensors@2.0-ScopedWakelock.so")) == "sensors wakelock\n" and
@@ -449,7 +447,7 @@ def main():
     check("service statsd" in rc, "statsd disabled")
     sys_init = os.listdir(os.path.join(R, "system/etc/init"))
     check("mediaserver.rc" not in sys_init and "init64.rc" in sys_init, "32-bit system service dropped: " + str(sys_init))
-    check("--create 1080x2340" in read(os.path.join(W, "wl-args.txt")), "display size")
+    check("--create 640x480" in read(os.path.join(W, "wl-args.txt")), "display size from the start request")
     check("--refresh 90" in read(os.path.join(W, "wl-args.txt")), "frame rate")
     check(os.path.isfile(os.path.join(inst, "shared/vinefb")), "vinefb created")
     check("/system/bin" in read(os.path.join(W, "init-env.txt")), "init gets the guest PATH")
