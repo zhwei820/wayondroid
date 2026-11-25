@@ -364,7 +364,7 @@ def main():
           not any("Jelly" in p for p in hidden), "Waydroid's files hidden from apps: " + str(hidden))
     ctx = read(os.path.join(R, "vendor/etc/selinux/vendor_property_contexts"))
     check(ctx.startswith("ro.hardware. ") and ctx.count("\nwaydroid. ") == 1 and "\nro.lineage. " in ctx and
-          ctx.count("\nro.vendor.display.gpu ") == 1, "Waydroid and Lineage props hidden from apps: " + ctx)
+          ctx.count("\nvendor.display.enable_gpu_buffers ") == 1, "Waydroid and Lineage props hidden from apps: " + ctx)
     z = read(os.path.join(R, "system/etc/init/hw/init.zygote64.rc"))
     check("service zygote " in z and "zygote_secondary" not in z, "zygote64 rc: " + z)
     rc_path = os.path.join(R, "system/product/etc/init/vine-rootless.rc")

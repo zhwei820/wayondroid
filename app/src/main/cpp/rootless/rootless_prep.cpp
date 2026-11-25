@@ -301,13 +301,19 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
 // load the driver as ANGLE (its platform first; anything else crashes in
 // ANGLE's eglGetProcAddress). The image's libEGL reads this property
 // instead (kEglStrings), so ro.hardware.egl can name a Pixel's driver.
-constexpr const char* kEglDriverProp = "ro.egl.hal.impl";
+// Apps' libEGL reads it too, so apps can read it: a name in the style of
+// the Pixel's own debug.egl.hw, no longer than "ro.hardware.egl".
+constexpr const char* kEglDriverProp = "debug.egl.drv";
+// What gralloc_shim.c reads in every app to take the GPU path, in the
+// style of the Pixel's vendor.display.enable_* switches
+constexpr const char* kGpuBuffersProp = "vendor.display.enable_gpu_buffers";
 
 std::string waydroid_prop(int dpi, bool gpu, bool egl_renamed) {
     return std::string(gpu ? "" : "ro.hardware.gralloc=default\n") +
            (egl_renamed ? "ro.hardware.egl=adreno\n" + std::string(kEglDriverProp) + "=angle\n"
                         : std::string("ro.hardware.egl=angle\n")) +
-           (gpu ? "ro.hardware.vulkan=adreno\nro.vendor.display.gpu=1\nro.zygote.disable_gl_preload=true\n" : "ro.hardware.vulkan=lvp\n") +
+           (gpu ? "ro.hardware.vulkan=adreno\n" + std::string(kGpuBuffersProp) + "=1\nro.zygote.disable_gl_preload=true\n"
+               : std::string("ro.hardware.vulkan=lvp\n")) +
            "sys.use_memfd=true\n"
            // Codec2 takes linear buffers from DMA-BUF heaps, which apps
            // can't open: gralloc blobs instead (ION | BUFFERQUEUE | BLOB)
@@ -1991,7 +1997,9 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!id.empty()) {
         const std::string egl = R + "/system/lib64/libEGL.so";
         if (const auto so = read_file(egl)) {
-            const std::pair<const char*, const char*> kEglStrings[] = {{"ro.hardware.egl", kEglDriverProp}};
+            // and an earlier name, in a libEGL patched before
+            const std::pair<const char*, const char*> kEglStrings[] = {{"ro.hardware.egl", kEglDriverProp},
+                                                                        {"ro.egl.hal.impl", kEglDriverProp}};
             const std::string patched = replace_cstrings(*so, kEglStrings);
             if (patched != *so && !write_mode(egl, patched, 0644, error)) return false;
             egl_renamed = patched.find(std::string(1, '\0') + kEglDriverProp + '\0') != std::string::npos;
@@ -2002,14 +2010,14 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     if (!write_mode(R + "/vendor/waydroid.prop",
                     waydroid_prop(id.dpi ? id.dpi : o.dpi, o.gpu, egl_renamed) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
         return false;
-    // gralloc reads ro.vendor.display.gpu in every app, and tawcroot denies
-    // apps the vendor_default_prop area that "ro.vendor." falls in
+    // gralloc reads kGpuBuffersProp in every app, and tawcroot denies apps
+    // the vendor areas "vendor.display." falls in
     const std::string vendor_prop_contexts = R + "/vendor/etc/selinux/vendor_property_contexts";
     if (const auto text = read_file(vendor_prop_contexts)) {
         std::string t = *text;
         if (!t.empty() && t.back() != '\n') t += "\n";
-        if (t.find("\nro.vendor.display.gpu ") == std::string::npos)
-            t += "ro.vendor.display.gpu u:object_r:exported_default_prop:s0 exact bool\n";
+        if (t.find(std::string("\n") + kGpuBuffersProp + " ") == std::string::npos)
+            t += std::string(kGpuBuffersProp) + " u:object_r:exported_default_prop:s0 exact bool\n";
         if (t.find("\nwaydroid. ") == std::string::npos) t += kHiddenPropContexts;
         if (t != *text && !write_mode(vendor_prop_contexts, t, 0644, error)) return false;
     }
