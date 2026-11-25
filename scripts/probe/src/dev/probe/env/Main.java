@@ -437,10 +437,7 @@ public class Main extends Activity {
             put("camera.ids", String.join(",", cm.getCameraIdList()));
         } catch (Exception e) { put("camera.ids", "ERR " + e); }
         for (String camId : new String[] {"0", "1"}) put("camera.capture." + camId, capture(camId, 640, 480));
-        for (String camId : new String[] {"0", "1"}) {
-            android.util.Size max = maxJpeg(camId);
-            put("camera.full." + camId, max == null ? "none" : capture(camId, max.getWidth(), max.getHeight()));
-        }
+
         try {
             android.hardware.camera2.CameraManager cm2 = (android.hardware.camera2.CameraManager) getSystemService(CAMERA_SERVICE);
             for (String camId : cm2.getCameraIdList()) {
