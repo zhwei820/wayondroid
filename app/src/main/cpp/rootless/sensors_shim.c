@@ -158,6 +158,22 @@ static const struct {
      kOneShot | kWakeUp, -1, 1.0f, 0.001f},
 };
 
+/* Wake-up twins of the sensors apps most look for, in the slots the host
+ * leaves empty (orientation, temperature, humidity, heart rate, RGBC
+ * light, wrist tilt): each a copy of its base sensor with the wake-up flag,
+ * fed a copy of the base's every event (POST_SENSOR_EVENT). vine_sensors
+ * lists the slots when it has the base. */
+static const struct { int base, slot; } kWakeTwins[] = {
+    {0, 3}, {1, 4}, {2, 8}, {kLight, 14}, {kPressure, 15}, {kHinge0, 16},
+};
+
+static int wake_twin(int handle)
+{
+    for (size_t i = 0; i < sizeof kWakeTwins / sizeof kWakeTwins[0]; i++)
+        if (kWakeTwins[i].base == handle) return kWakeTwins[i].slot;
+    return -1;
+}
+
 static void set_str(struct hstr* h, const char* text)
 {
     h->buf = text;
@@ -227,6 +243,17 @@ static void patch_table(void)
         s->resolution = 1.0f;
         s->power = kRetype[i].power;
         s->fifo_reserved = s->fifo_max = 0;
+    }
+    static char names[sizeof kWakeTwins / sizeof kWakeTwins[0]][96];
+    for (size_t i = 0; i < sizeof kWakeTwins / sizeof kWakeTwins[0]; i++) {
+        struct sensor_info* w = &t[kWakeTwins[i].slot];
+        *w = t[kWakeTwins[i].base];
+        w->handle = kWakeTwins[i].slot;
+        snprintf(names[i], sizeof names[i], "%s Wakeup", w->name.buf ? w->name.buf : "");
+        set_str(&w->name, names[i]);
+        /* the copied strings stay the base's to free */
+        w->vendor.owns = w->type_string.owns = w->permission.owns = false;
+        w->flags |= kWakeUp;
     }
 }
 
@@ -343,6 +370,16 @@ EXPORT void SEND_INFO_REPORT(void* self, int handle)
     post_locked(self, &table[handle], &e);
 }
 
+static void post_twin(void* self, post_fn real, const struct event* e)
+{
+    const int slot = table ? wake_twin(e->handle) : -1;
+    if (slot < 0) return;
+    struct event twin = *e;
+    twin.handle = slot;
+    remember(&twin);
+    real(self, &twin);
+}
+
 /* vine_sensors sends hinge angles: the step count, and for the detector
  * and significant motion a value that changes on each event (the sub-HAL
  * posts a hinge angle only when it changes) */
@@ -360,6 +397,7 @@ EXPORT void POST_SENSOR_EVENT(void* self, const struct event* e)
     if (e->type != kTypeHinge || e->handle < kHinge0 || e->handle > kHinge2) {
         remember(e);
         real(self, e);
+        post_twin(self, real, e);
         return;
     }
     struct event out = *e;
@@ -373,6 +411,7 @@ EXPORT void POST_SENSOR_EVENT(void* self, const struct event* e)
     }
     remember(&out);
     real(self, &out);
+    post_twin(self, real, &out);
 }
 
 static int open_pipe(int flags)

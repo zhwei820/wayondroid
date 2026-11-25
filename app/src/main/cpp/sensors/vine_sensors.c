@@ -139,11 +139,17 @@ static void logmsg(const char* fmt, const char* a)
     fputc('\n', stderr);
 }
 
+/* The guest's sensors_shim.c makes wake-up twins of these in the unused
+ * handles (base handle, twin handle); they need no events of their own */
+static const int kWakeTwins[][2] = {{0, 3}, {1, 4}, {2, 8}, {6, 14}, {7, 15}, {11, 16}};
+
 static uint32_t mask(void)
 {
     uint32_t m = 0;
     for (size_t i = 0; i < NMAP; i++)
         if (g.sensor[i] || synthetic(i)) m |= 1u << kMap[i].bit;
+    for (size_t i = 0; i < sizeof kWakeTwins / sizeof kWakeTwins[0]; i++)
+        if (m & (1u << kWakeTwins[i][0])) m |= 1u << kWakeTwins[i][1];
     return m;
 }
 
