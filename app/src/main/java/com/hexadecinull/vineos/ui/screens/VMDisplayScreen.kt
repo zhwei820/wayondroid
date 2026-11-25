@@ -281,20 +281,20 @@ private fun GuestSurface(
     )
 }
 
-// With the phone's own contact size (a fraction of its touchscreen's size axis), so guest apps see a
+// With the phone's own contact size (its AXIS_SIZE, the raw contact over the raw range), so guest apps see a
 // real finger's. Phones whose touchscreens report no pressure give a constant 1.0 (or 0): then the
 // pressure follows the contact size, as capacitive "pressure" mostly does, with a little noise.
 private fun MotionEvent.toPoints(width: Int, height: Int, withContact: Boolean = false): List<TouchPoint> {
     val w = width.coerceAtLeast(1).toFloat()
     val h = height.coerceAtLeast(1).toFloat()
-    val majorMax = device?.getMotionRange(MotionEvent.AXIS_TOUCH_MAJOR)?.max ?: 0f
-    val minorMax = device?.getMotionRange(MotionEvent.AXIS_TOUCH_MINOR)?.max ?: majorMax
     return List(pointerCount) { i ->
-        if (!withContact || majorMax <= 0f) {
+        if (!withContact) {
             TouchPoint(getPointerId(i), getX(i) / w, getY(i) / h)
         } else {
-            val major = getTouchMajor(i) / majorMax
-            val minor = if (minorMax > 0f) getTouchMinor(i) / minorMax else major
+            // AXIS_SIZE is the raw contact over the raw axis's range; the touch-major axis's range is
+            // the screen diagonal under geometric calibration, so it can't scale the raw value back
+            val major = getSize(i).coerceIn(0f, 1f)
+            val minor = if (getTouchMajor(i) > 0f) major * (getTouchMinor(i) / getTouchMajor(i)).coerceIn(0f, 1f) else major
             var pressure = getPressure(i)
             if (pressure <= 0f || pressure >= 0.999f) {
                 pressure = (0.05f + major.coerceAtLeast(minor) * 255f * 0.06f +

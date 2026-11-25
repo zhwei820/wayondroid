@@ -12,7 +12,10 @@ ADB=${ADB:-$(command -v adb || echo ~/Library/Android/sdk/platform-tools/adb)}
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 sh_() { "$ADB" shell "$@"; }
-send() { sh_ "run-as $PKG $LIB/libvine_helper.so --send files/rootless.sock $*" | tr -d '\r'; }
+lib_dir() { sh_ pm path $PKG | head -1 | tr -d '\r' | sed 's/^package://;s/base\.apk$//'; }
+# The lib dir moves on every reinstall, so it is resolved per call: a long wait
+# (reset-instance.sh) can outlive an `adb install`.
+send() { sh_ "run-as $PKG \$(pm path $PKG | head -1 | sed 's/^package://;s/base\.apk\$//')lib/arm64/libvine_helper.so --send files/rootless.sock $*" | tr -d '\r'; }
 booted() { send status "$ID" | tr '\n' ' ' | grep -q 'state=running .*boot=1'; }
 wait_pm() {
     for _ in $(seq 30); do send exec "$ID" 10000 pm path android | grep -q package: && return; sleep 2; done
@@ -21,7 +24,7 @@ wait_pm() {
 
 vine_init() {
     [ "$(sh_ getprop sys.boot_completed | tr -d '\r')" = 1 ] || die "no adb device"
-    LIB=$(sh_ pm path $PKG | head -1 | tr -d '\r' | sed 's/^package://;s/base\.apk$//')lib/arm64
+    LIB=$(lib_dir)lib/arm64
     [ "$LIB" != lib/arm64 ] || die "$PKG not installed"
     ID=${1:-}
     if [ -z "$ID" ]; then
