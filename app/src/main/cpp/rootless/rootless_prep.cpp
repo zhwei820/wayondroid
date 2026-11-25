@@ -2019,9 +2019,14 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         }
     }
     // Mobile data off by default: vine_modem fails data calls, and the
-    // RIL sets its data interface down when one ends, which may be wlan0
+    // RIL sets its data interface down when one ends, which may be wlan0.
+    // The Pixel 5's vendor build.prop allows two active modems (SIM + eSIM,
+    // getSupportedModemCount); active stays 1, as no multisim config is set
     if (!write_mode(R + "/vendor/waydroid.prop",
-                    waydroid_prop(id.dpi ? id.dpi : o.dpi, o.gpu, egl_renamed) + (radio ? "ro.com.android.mobiledata=false\n" : ""), 0644, error))
+                    waydroid_prop(id.dpi ? id.dpi : o.dpi, o.gpu, egl_renamed) +
+                        (radio ? "ro.com.android.mobiledata=false\n" : "") +
+                        (radio && !id.empty() ? "telephony.active_modems.max_count=2\n" : ""),
+                    0644, error))
         return false;
     // gralloc reads kGpuBuffersProp in every app, and tawcroot denies apps
     // the vendor areas "vendor.display." falls in

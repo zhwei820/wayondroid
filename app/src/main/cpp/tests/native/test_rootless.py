@@ -417,6 +417,7 @@ def main():
           "<fqname>IRadioConfig/default</fqname>" in radio_vintf, "RIL VINTF")
     check("android.hardware.telephony" in read(os.path.join(R, "vendor/etc/permissions/android.hardware.telephony.gsm.xml")), "telephony feature")
     check("ro.com.android.mobiledata=false\n" in read(os.path.join(R, "vendor/waydroid.prop")), "mobile data off")
+    check("telephony.active_modems.max_count=2\n" in read(os.path.join(R, "vendor/waydroid.prop")), "two supported modems")
     seed = read(os.path.join(W, "device.seed")).strip()
     check(re.fullmatch(r"[0-9a-f]{32}", seed) is not None, "device seed: " + seed)
     check(re.fullmatch(r"androidboot\.hardware=redfin androidboot\.serialno=0[9AB]\d\d1FDD400\d[0-9A-Z]{2} .*\n",
