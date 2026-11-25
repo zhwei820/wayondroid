@@ -7,6 +7,7 @@
 #include "device_view.h"
 #include "app_hidden.h"
 #include "errno_neg.h"
+#include "identity.h"
 #include "io.h"
 #include "linkstore.h"
 #include "loader_exec.h"
@@ -185,21 +186,72 @@ size_t tawcroot_device_status(char *buf, size_t len, size_t cap)
 	return o;
 }
 
-/* /proc/self/<leaf>, /proc/thread-self/<leaf> or /proc/<our pid>/<leaf> */
-static int own_proc_file(const char *path, const char *leaf)
+/* What follows /proc/self/, /proc/thread-self/ or /proc/<our pid>/ in
+ * `path`, or NULL */
+static const char *own_proc_rest(const char *path)
 {
 	if (!tawc_starts_with(path, "/proc/")) return 0;
 	const char *p = path + 6;
-	if (tawc_starts_with(p, "self/")) p += 5;
-	else if (tawc_starts_with(p, "thread-self/")) p += 12;
-	else {
-		unsigned long pid = 0;
-		const char *q = p;
-		while (*q >= '0' && *q <= '9') pid = pid * 10 + (unsigned long)(*q++ - '0');
-		if (q == p || *q != '/' || pid != (unsigned long)tawc_getpid()) return 0;
+	if (tawc_starts_with(p, "self/")) return p + 5;
+	if (tawc_starts_with(p, "thread-self/")) return p + 12;
+	unsigned long pid = 0;
+	const char *q = p;
+	while (*q >= '0' && *q <= '9') pid = pid * 10 + (unsigned long)(*q++ - '0');
+	if (q == p || *q != '/' || pid != (unsigned long)tawc_getpid()) return 0;
+	return q + 1;
+}
+
+/* /proc/self/<leaf>, /proc/thread-self/<leaf> or /proc/<our pid>/<leaf> */
+static int own_proc_file(const char *path, const char *leaf)
+{
+	const char *p = own_proc_rest(path);
+	return p && tawc_streq(p, leaf);
+}
+
+/* The process's or one of its threads' SELinux context */
+static int own_attr_current(const char *path)
+{
+	const char *p = own_proc_rest(path);
+	if (!p) return 0;
+	if (tawc_starts_with(p, "task/")) {
+		const char *q = p + 5;
+		while (*q >= '0' && *q <= '9') q++;
+		if (q == p + 5 || *q != '/') return 0;
 		p = q + 1;
 	}
-	return tawc_streq(p, leaf);
+	return tawc_streq(p, "attr/current");
+}
+
+/* The phone's context for this thread with the MLS categories an app of
+ * the guest's uid has (seapp_contexts' levelFrom=all), not the Wayondroid
+ * app's: c<appid & 0xff>,c<256 + appid >> 8>,c<512 + user & 0xff>,
+ * c<768 + user >> 8>. The domain stays the phone's. */
+static long open_attr_current(int flags)
+{
+	char ctx[256];
+	long fd = tawc_openat(AT_FDCWD, "/proc/thread-self/attr/current", O_RDONLY | O_CLOEXEC, 0);
+	if (fd < 0) return TAWC_ENOSYS;
+	long n = tawc_read((int)fd, ctx, sizeof ctx - 1);
+	tawc_close((int)fd);
+	if (n <= 0) return TAWC_ENOSYS;
+	ctx[n] = 0;
+	long at = -1;
+	for (long i = 0; i + 3 <= n; i++)
+		if (ctx[i] == ':' && ctx[i + 1] == 's' && ctx[i + 2] == '0') { at = i + 3; break; }
+	if (at < 0) return TAWC_ENOSYS;
+	const unsigned long uid = tawcroot_identity_euid();
+	const unsigned long appid = uid % 100000, user = uid / 100000;
+	char out[256];
+	size_t k = 0;
+	for (long i = 0; i < at; i++) out[k++] = ctx[i];
+	const unsigned long cats[] = { appid & 0xff, 256 + ((appid >> 8) & 0xff), 512 + (user & 0xff), 768 + ((user >> 8) & 0xff) };
+	for (int i = 0; i < 4; i++) {
+		if (tawc_str_append(out, sizeof out, &k, i ? ",c" : ":c") || tawc_str_append_dec(out, sizeof out, &k, (long)cats[i]))
+			return TAWC_ENOSYS;
+	}
+	/* the kernel's text ends in a NUL */
+	if (ctx[n - 1] == 0 && k < sizeof out) out[k++] = 0;
+	return memfd_of("tawcroot-attr", out, k, flags);
 }
 
 /* The auxv the loader gave the guest (loader_stack.c), not the kernel's
@@ -383,6 +435,7 @@ long tawcroot_device_open(const char *path, int flags)
 		return n > 0 ? memfd_of("tawcroot-policyvers", buf, (size_t)n, flags) : TAWC_ENOSYS;
 	}
 	if (!tawcroot_guest_is_app()) return TAWC_ENOSYS;
+	if (own_attr_current(path)) return open_attr_current(flags);
 	if (tawc_streq(path, "/proc/cpuinfo")) {
 		n = read_device("cpuinfo", buf, TAWCROOT_PATH_SCRATCH_SIZE);
 		return n > 0 ? memfd_of("tawcroot-cpuinfo", buf, (size_t)n, flags) : TAWC_ENOSYS;
