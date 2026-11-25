@@ -224,8 +224,8 @@ static int own_attr_current(const char *path)
 
 /* The phone's context for this thread with the MLS categories an app of
  * the guest's uid has (seapp_contexts' levelFrom=all), not the Wayondroid
- * app's: c<appid & 0xff>,c<256 + appid >> 8>,c<512 + user & 0xff>,
- * c<768 + user >> 8>. The domain stays the phone's. */
+ * app's: with n = appid - 10000, c<n & 0xff>,c<256 + n >> 8>,
+ * c<512 + user & 0xff>,c<768 + user >> 8>. The domain stays the phone's. */
 static long open_attr_current(int flags)
 {
 	char ctx[256];
@@ -240,7 +240,9 @@ static long open_attr_current(int flags)
 		if (ctx[i] == ':' && ctx[i + 1] == 's' && ctx[i + 2] == '0') { at = i + 3; break; }
 	if (at < 0) return TAWC_ENOSYS;
 	const unsigned long uid = tawcroot_identity_euid();
-	const unsigned long appid = uid % 100000, user = uid / 100000;
+	/* counted from the first app uid (AID_APP_START), as the phone's own
+	 * context shows for its app */
+	const unsigned long appid = uid % 100000 - 10000, user = uid / 100000;
 	char out[256];
 	size_t k = 0;
 	for (long i = 0; i < at; i++) out[k++] = ctx[i];
