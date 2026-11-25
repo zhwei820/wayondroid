@@ -1159,10 +1159,13 @@ bool remove_foreign_apps(const std::string& R, std::string* error) {
 }
 
 // A Pixel 5's own system apps, taken from its factory image's product.img
-// and put in the app's files/system-apps/<Name>/<Name>.apk (not shipped:
-// Chrome, its TrichromeLibrary, GoogleCamera are 240 MB), installed where
-// the Pixel has them. Chrome replaces LineageOS's browser, GoogleCamera its
-// camera app.
+// into the app's files/system-apps/<dir>/ as the image has them (not
+// shipped: Chrome, its TrichromeLibrary, GoogleCamera are 190 MB), each
+// <dir> kept the same as /system/product/app/<dir>. Chrome and its library
+// stay as the Pixel ships them, a stub plus a compressed APK that
+// PackageManager unpacks into /data/app: loaded in place from the system
+// image, Chrome's linker can't load its library. Chrome replaces
+// LineageOS's browser, GoogleCamera its camera app.
 bool install_system_apps(const Layout& l, const std::string& R, std::string* error) {
     // <files>/instances/<id>
     std::string files = l.instance;
@@ -1173,26 +1176,36 @@ bool install_system_apps(const Layout& l, const std::string& R, std::string* err
         files.resize(slash);
     }
     const std::string src = files + "/system-apps";
-    DIR* d = opendir(src.c_str());
-    if (!d) return true;
-    std::vector<std::string> names;
-    while (dirent* e = readdir(d))
-        if (e->d_name[0] != '.') names.push_back(e->d_name);
-    closedir(d);
+    auto entries = [](const std::string& dir) {
+        std::vector<std::string> out;
+        if (DIR* d = opendir(dir.c_str())) {
+            while (dirent* e = readdir(d))
+                if (e->d_name[0] != '.') out.push_back(e->d_name);
+            closedir(d);
+        }
+        return out;
+    };
     const std::string app_dir = R + "/system/product/app/";
-    for (const std::string& n : names) {
-        if (n.find('/') != std::string::npos) continue;
-        const std::string apk = src + "/" + n + "/" + n + ".apk", dst = app_dir + n + "/" + n + ".apk";
-        struct stat a {}, b {};
-        if (stat(apk.c_str(), &a) != 0 || !S_ISREG(a.st_mode)) continue;
-        if (stat(dst.c_str(), &b) == 0 && b.st_size == a.st_size) continue;
-        if (!mkdirs_or_fail(app_dir + n, error) || !copy_mode(apk, dst, 0644, error)) return false;
+    bool chrome = false, camera = false;
+    for (const std::string& n : entries(src)) {
+        const std::string from = src + "/" + n, to = app_dir + n;
+        const std::vector<std::string> wanted = entries(from);
+        if (wanted.empty()) continue;
+        if (!mkdirs_or_fail(to, error)) return false;
+        for (const std::string& f : entries(to))
+            if (std::find(wanted.begin(), wanted.end(), f) == wanted.end() && !remove_if_exists(to + "/" + f, error))
+                return false;
+        for (const std::string& f : wanted) {
+            struct stat a {}, b {};
+            if (stat((from + "/" + f).c_str(), &a) != 0 || !S_ISREG(a.st_mode)) continue;
+            if (stat((to + "/" + f).c_str(), &b) == 0 && b.st_size == a.st_size) continue;
+            if (!copy_mode(from + "/" + f, to + "/" + f, 0644, error)) return false;
+        }
+        chrome |= n == "Chrome" || n == "Chrome-Stub";
+        camera |= n == "GoogleCamera";
     }
-    if (is_regular_file(app_dir + "Chrome/Chrome.apk") && is_regular_file(app_dir + "TrichromeLibrary/TrichromeLibrary.apk") &&
-        !remove_if_exists(app_dir + "Jelly", error))
-        return false;
-    if (is_regular_file(app_dir + "GoogleCamera/GoogleCamera.apk") && !remove_if_exists(app_dir + "Aperture", error))
-        return false;
+    if (chrome && !remove_if_exists(app_dir + "Jelly", error)) return false;
+    if (camera && !remove_if_exists(app_dir + "Aperture", error)) return false;
     return true;
 }
 

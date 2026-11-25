@@ -42,7 +42,7 @@ mkdir -p "$w/classes" "$w/dex"
 # The guest, through the engine's debug socket (debug builds)
 helper="$("$adb" shell "cat /proc/\$(pidof -s libvine_helper.so)/cmdline" | tr '\0' '\n' | head -1)"
 id="$("$adb" shell "run-as $host ls files/instances" | tr -d '\r' | head -1)"
-gx() { "$adb" shell "run-as $host $helper --send files/rootless.sock exec $id 200000 sh -c $(printf %q "$1")" | grep -v linkerconfig; }
+gx() { "$adb" shell "run-as $host $helper --send files/rootless.sock exec $id 400000 sh -c $(printf %q "$1")" | grep -v linkerconfig; }
 data="files/instances/$id/rootless/data"
 "$adb" exec-in "run-as $host sh -c 'cat > $data/local/tmp/probe.apk'" < "$w/probe.apk"
 # pm install PATH: PackageManager's SELinux check refuses a file the app (its host uid) wrote; stdin is fine
