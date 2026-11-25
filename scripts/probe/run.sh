@@ -49,7 +49,7 @@ data="files/instances/$id/rootless/data"
 gx "f=/data/local/tmp/probe.apk; cat \$f | pm install -r -S \$(stat -c %s \$f) >/dev/null; rm \$f
     for p in READ_PHONE_STATE ACCESS_FINE_LOCATION BLUETOOTH_CONNECT CAMERA ACTIVITY_RECOGNITION; do pm grant $pkg android.permission.\$p; done
     rm -f /data/data/$pkg/files/report.txt /data/data/$pkg/files/closed; am start -W -n $pkg/.Main >/dev/null
-    for i in \$(seq 1 150); do [ -s /data/data/$pkg/files/report.txt ] && break; sleep 1; done
+    for i in \$(seq 1 300); do [ -s /data/data/$pkg/files/report.txt ] && break; sleep 1; done
     cat /data/data/$pkg/files/report.txt" | grep -v '^exit='
 echo "probe: showing live sensor readings in the guest; tap 关闭 there to finish" >&2
 until gx "{ [ -e /data/data/$pkg/files/closed ] || ! pidof $pkg >/dev/null; } && echo CLOSED" | grep -q CLOSED; do sleep 2; done

@@ -1158,6 +1158,44 @@ bool remove_foreign_apps(const std::string& R, std::string* error) {
     return true;
 }
 
+// A Pixel 5's own system apps, taken from its factory image's product.img
+// and put in the app's files/system-apps/<Name>/<Name>.apk (not shipped:
+// Chrome, its TrichromeLibrary, GoogleCamera are 240 MB), installed where
+// the Pixel has them. Chrome replaces LineageOS's browser, GoogleCamera its
+// camera app.
+bool install_system_apps(const Layout& l, const std::string& R, std::string* error) {
+    // <files>/instances/<id>
+    std::string files = l.instance;
+    while (files.size() > 1 && files.back() == '/') files.pop_back();
+    for (int i = 0; i < 2; i++) {
+        const size_t slash = files.rfind('/');
+        if (slash == std::string::npos || slash == 0) return true;
+        files.resize(slash);
+    }
+    const std::string src = files + "/system-apps";
+    DIR* d = opendir(src.c_str());
+    if (!d) return true;
+    std::vector<std::string> names;
+    while (dirent* e = readdir(d))
+        if (e->d_name[0] != '.') names.push_back(e->d_name);
+    closedir(d);
+    const std::string app_dir = R + "/system/product/app/";
+    for (const std::string& n : names) {
+        if (n.find('/') != std::string::npos) continue;
+        const std::string apk = src + "/" + n + "/" + n + ".apk", dst = app_dir + n + "/" + n + ".apk";
+        struct stat a {}, b {};
+        if (stat(apk.c_str(), &a) != 0 || !S_ISREG(a.st_mode)) continue;
+        if (stat(dst.c_str(), &b) == 0 && b.st_size == a.st_size) continue;
+        if (!mkdirs_or_fail(app_dir + n, error) || !copy_mode(apk, dst, 0644, error)) return false;
+    }
+    if (is_regular_file(app_dir + "Chrome/Chrome.apk") && is_regular_file(app_dir + "TrichromeLibrary/TrichromeLibrary.apk") &&
+        !remove_if_exists(app_dir + "Jelly", error))
+        return false;
+    if (is_regular_file(app_dir + "GoogleCamera/GoogleCamera.apk") && !remove_if_exists(app_dir + "Aperture", error))
+        return false;
+    return true;
+}
+
 // A Pixel 5's /vendor as apps list it (scripts/rootless/stage-vendor-view.py
 // stages its names): placeholders where the guest lacks a name, sparse
 // zeros or commented-out init scripts, and the guest's own names in those
@@ -1993,7 +2031,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // the phone's battery
     if (!mkdirs_or_fail(l.work + "/power_supply", error) || chmod((l.work + "/power_supply").c_str(), 0755) != 0)
         return fail_errno(error, "chmod power_supply");
-    if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) ||
+    if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) || !install_system_apps(l, R, error) ||
         (!id.empty() && !install_vendor_view(R, o.lib_dir, &extra_hidden, error)) ||
         !write_mode(l.store + "/app-hidden", app_hidden_list(R) + extra_hidden, 0644, error) ||
         !std::all_of(std::begin(kPatchedJars), std::end(kPatchedJars),
