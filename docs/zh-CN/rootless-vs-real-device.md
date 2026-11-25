@@ -1,7 +1,7 @@
 # 子系统与真机对照（环境探针）
 
-2026-11-24 第三次实测（21:45），子系统对应 `1b7ad96` 加工作区未提交改动
-（`rootless_prep.cpp`、探针 `Main.java`）；真机列沿用第二次实测（18:23），本轮未重跑。
+2026-11-25 第四次实测（10:05），子系统对应 `93000b2`（当前 HEAD）；
+真机列沿用 2026-11-24 第二次实测（18:23），本轮未重跑。
 两侧运行同一份探针 `dev.probe.env`（普通第三方应用视角，非 shell/root）：
 子系统用 `scripts/probe/run.sh`，真机用同一份源码以可调试构建安装后运行。
 
@@ -22,38 +22,34 @@
 ## 结论
 
 1. **硬标记**：探针的值正则在子系统侧 `<<MARK` 为 0；`org.lineageos.*`
-   （含 Jelly / Aperture）对第三方应用的包查询已全部隐藏，隐式 Intent 仍可解析到它们。
+   对第三方应用的包查询已全部隐藏，隐式 Intent 仍可解析到它们。
 2. **仍存差异（与权限无关，可直接比较）**：
-   - 气压计列在传感器表里，但 5 秒内没有任何事件（探针记为 `NaN`）
-   - 相机特性已按 Pixel 5 报 4032×3024 / 3264×2448，实际出图仍是两路相同的 640×480 测试图
-   - 138 个包、无 GMS / Play / Chrome / Pixel 系应用
-   - `/vendor` 内容稀疏（`/vendor/etc/init` 14 项、`/vendor/bin/hw` 12 项）
-   - 网络接口只有 `dummy0 wlan0 lo`（缺 `rmnet_*`、`ifb*`）
-   - 显示模式只有 90Hz 一个（Pixel 5 有 60/90）
-   - 无显著运动传感器；除接近传感器外无 wakeup 版本
-   - `tel.serviceState=null`、`supportedModemCount=1`
-   - `/proc/self/mounts` 93 行（真机 218）；`/dev/socket` 无 `zygote_secondary`
-3. **探针覆盖不到、但应用可测的底层差异**：CPU ID 寄存器、真实内核的系统调用集、
+   - `/proc/self/mounts` 104 行（真机 218）；`/dev/socket` 无 `zygote_secondary`
+   - 相机只测了 640×480；全尺寸 4032×3024 / 3264×2448 与 RAW 未实测，第三颗超广角未暴露
+   - 图形扩展集 124 vs 真机 104，缺 `GL_OES_tessellation_shader` / `GL_OES_gpu_shader5`
+   - 网络接口只有 `dummy0 wlan0 ifb0 lo ifb1`（`rmnet_*` 有意不列）
+   - 162 个包、无 GMS / Play（用户未要求补齐）
+   - `supportedModemCount=1`（Pixel 5 有 eSIM，预期 2，未核对）
+3. **探针覆盖不到、但应用可测的底层差异**：CPU ID 寄存器、真实内核 5.10 的系统调用集、
    性能与时序，见「附：已知的探针盲区」。
-4. **待核对值**：`uname` 内核串、`phoneCount` / `supportedModemCount`、
-   相机 hardware level 与物理摄像头组成、传感器器件型号、`MemTotal`、
-   `Build.HOST`、`ro.build.date`。
+4. **待核对值**：`Build.HOST`、传感器器件型号、`MemTotal`、`ro.build.date`、
+   `phoneCount` / `supportedModemCount`、超广角相机组成。
 
-## 本轮已修复（探针验证，相对第二次实测）
+## 本轮已修复（第四次实测，相对第三次）
 
-| 项 | 第二次 | 本次 |
+| 项 | 第三次 | 本次 |
 |---|---|---|
-| ro.hardware.egl | angle | adreno ✅ |
-| gl.version | OpenGL ES 3.1 | OpenGL ES 3.2，请求 3.2 上下文成功 ✅（底层仍为 ANGLE，见第 6 节） |
-| 传感器 | 13 个应用可见，缺气压计/计步/gyro uncalibrated | 17 个，含 BMP380 气压计、Step Counter/Detector、Gyroscope/Accel/Mag Uncalibrated ✅（气压计无事件 ❌） |
-| 传感器型号 | LSM6DSR / MMC56X3X / TMD3719 | LSM6DSR / LIS2MDL / TCS3701 / BMP380 |
-| 相机特性 | 未探测 | 后置 4032×3024、前置 3264×2448，朝向 90/270 ✅（出图仍是测试图 ❌） |
-| net.interfaces | `wlan0 lo` | `dummy0 wlan0 lo`（部分） |
-| /proc/self/mounts | 66 行 | 93 行（部分） |
-| /proc/self/cgroup | 仅 `0::` | v1（memory/cpuset/cpu/blkio）+ `0::` ✅ |
-| /dev/socket | 缺 location / wpa | 有 `location`、`wpa_wlan0`、`qmux_radio`、`ims_*` 等高通风格套接字 ✅ |
-| Wi-Fi 两条路径 | ConnectionInfo 真值、TransportInfo 脱敏，自相矛盾 | 带 `FLAG_INCLUDE_LOCATION_INFO` 时 TransportInfo 也给真值（SSID/BSSID/id=0），默认回调脱敏，与 AOSP 语义一致 ✅ |
-| 应用可见 LineageOS 包 | jelly / aperture | 无 ✅ |
+| 显示模式 | 仅 `1080x2340@90` | `1080x2340@60` + `@90` ✅（`hwc_shim.c`） |
+| 传感器 | 17 个；气压计无事件；无显著运动；无 wakeup 变体 | 24 个；气压计 6 秒 86 次事件；显著运动恢复；加速度/陀螺/磁力/光感/气压/计步有 `… Wakeup` 副本 ✅ |
+| 相机出图 | 两路同一张 640×480 测试图（中心 `ff008700`） | 两路为宿主相机真实帧，各 45–50 帧、内容不同 ✅（仍只测 640×480） |
+| 网络接口 | `dummy0 wlan0 lo` | `dummy0 wlan0 ifb0 lo ifb1` ✅（`rmnet_*` 仍有意不列） |
+| `/vendor` 内容 | etc/init 14、bin/hw 12、lib64/hw 32 | 86 / 51 / 30（Pixel 5 工厂镜像 87 / 53 / 36，vendor view 生效）✅ |
+| `/proc/self/mounts` | 93 行 | 104 行（部分） |
+| 应用可见包 | 138，无 Chrome | 162，含 Chrome / TrichromeLibrary ✅（无 GMS） |
+| uname | `4.19.269-…`，未核对 | 与 TQ3A.230901.001.C2 的 `boot.img` 完全一致 ✅ |
+
+第三次已验的 `ro.hardware.egl=adreno`、GL ES 3.2、传感器器件型号、Wi-Fi 两条路径一致、
+LineageOS 包隐藏，本次保持。
 
 ## 1. 身份与构建
 
@@ -74,14 +70,14 @@
 | ro.secure / ro.debuggable | 1 / 0 | 1 / 0 | 1 / 0 | ✅ |
 | ro.boot.verifiedbootstate / flash.locked | green / 1 | green / 1 | green / 1 | ✅ |
 | ro.revision / ro.boot.hardware.revision | MP1.0 / MP1.0 | 0 / 空 | ★ MP1.0 | ✅ |
-| uname | `4.19.269-g8728c337137c-ab10161573 #1 SMP PREEMPT Thu May 18 11:19:41 UTC 2023` | 5.10.236-android12-9-o-g74d132f4467a | ★ `4.19.278-g…`（redfin 公开内核串） | ⚠️ 本串未见于 redfin 固件，待核对 |
+| uname | `4.19.269-g8728c337137c-ab10161573 #1 SMP PREEMPT Thu May 18 11:19:41 UTC 2023` | 5.10.236-android12-9-o-g74d132f4467a | `4.19.269-g8728c337137c-ab10161573 …`（TQ3A.230901.001.C2 的 `boot.img`） | ✅ 与工厂镜像一致 |
 
 ## 2. 显示与硬件参数
 
 | 字段 | 子系统 | 真机 PHK110 | Pixel 5 参照 | 判定 |
 |---|---|---|---|---|
 | display | 1080x2340 dpi=440 | 1240x2772 dpi=560 | 1080x2340 @440ppi | ✅ |
-| display.modes | 仅 `1080x2340@90` | 60 fps，备选 90/120 | ★ 60/90 两档 | ❌ 缺 60Hz 模式 |
+| display.modes | `1080x2340@60` + `@90` | 60 fps，备选 90/120 | ★ 60/90 两档 | ✅ |
 | mem.total | 7,795,003,392（MemTotal 7,612,303 kB） | 15,957,581,824 | 8GB 机型，具体 MemTotal ⚠️ | ⚠️ |
 | statfs.data | 118,648,471,552（≈110.5 GiB） | 492 GB | 128GB 机型，可用 ≈110GiB | ✅ |
 | runtime.cpus / cpufreq policies | 8；policy0/6/7，1.8/2.2/2.4 GHz | 8；policy0/4/7 | ★ 同子系统（SM7250） | ✅ |
@@ -91,42 +87,53 @@
 
 ## 3. 传感器
 
-应用可见 17 个：LSM6DSR 加速度/陀螺（含 uncalibrated）、LIS2MDL 磁力计（含
+应用可见 24 个：LSM6DSR 加速度/陀螺（含 uncalibrated）、LIS2MDL 磁力计（含
 uncalibrated）、TCS3701 接近（wakeup）/光感、BMP380 气压计、Google Step Counter /
-Step Detector，以及 AOSP 融合传感器（Game/GeoMag/Rotation Vector、Gravity、
-Linear Acceleration、Orientation）。
+Step Detector、显著运动，以及加速度/陀螺/磁力/光感/气压/计步的 `… Wakeup` 副本；
+AOSP 融合传感器（Game/GeoMag/Rotation Vector、Gravity、Linear Acceleration、
+Orientation）也在。
 
-- **气压计无数据** ❌：注册 `TYPE_PRESSURE` 后 5 秒内没有任何事件（探针输出
-  `NaN hPa` 即「未收到事件」）。有传感器却不出数据，比没有更显眼。
-- **显著运动缺失** ❌：`e053333` 有意去掉（sub-HAL 对无速率 one-shot 传感器空转）。
-- **wakeup 版本** ❌：除接近传感器外均无 wakeup 变体；真机通常加速度、
-  计步、显著运动等都有 wakeup 版本。
-- 器件型号是否为 Pixel 5 实际器件 ⚠️ 待核对。
+- **气压计有数据** ✅：注册 `TYPE_PRESSURE` 后 6 秒 86 次事件（1011.75 hPa）。
+  宿主没有气压计时由 vine_sensors 合成：数小时尺度的漂移 + 几十 Pa 的噪声。
+- **显著运动已恢复** ✅：sub-HAL 对 one-shot 传感器在 `setAllQemuSensors` 后按
+  on-change 处理，避免无速率空转（`sensors_shim.c`）。
+- **wakeup 版本** ✅：六个基传感器各有副本（事件由 `POST_SENSOR_EVENT` 复制）；
+  接近与显著运动本身即 wakeup。除接近外，其余 wakeup 在第三次实测中缺失。
+- 步数/步测/显著运动由宿主加速度计驱动的计步器产生；静止时步测/显著运动无事件，
+  属正常行为，不是缺数据。
+- 器件型号是否为 Pixel 5 实际器件 ⚠️ 待核对；传感器读数是宿主真实数据，
+  不是固定值或过度平滑的模拟值。
 - 无指纹、NFC：用户明确不要，属有意不同。
 
 ## 4. 相机
 
 | 项 | 子系统 | 真机 PHK110 | Pixel 5 参照 | 判定 |
 |---|---|---|---|---|
-| camera.ids | 0,1 | 0,1 | ★ 后置 12.2MP + 16MP 超广角、前置 8MP | ⚠️ 超广角如何暴露待核对 |
+| camera.ids | 0,1 | 0,1 | ★ 后置 12.2MP + 16MP 超广角、前置 8MP | ⚠️ 超广角未暴露 |
 | chars.0（后置） | pixelArray 4032×3024，level=3，焦距 4.38，朝向 90，physicalIds=[] | 未测（无权限） | ★ 12.2MP = 4032×3024 | ✅ 尺寸；level 待核对 |
 | chars.1（前置） | pixelArray 3264×2448，level=1，焦距 2.51，朝向 270 | 未测 | ★ 8MP = 3264×2448 | ✅ 尺寸 |
-| 实际出图 | 两路均为 JPEG 640×480，中心像素都是 `ff008700` | 未测（无权限） | 与特性一致的全尺寸照片 | ❌ 测试图，且与声明的 maxJpeg 4032×3024 不符 |
-| features | camera.full/raw/manual_sensor/autofocus/flash/front | 同左 + NFC/指纹等 | 同左 | ⚠️ 声明 full/raw，但出图是测试图 |
+| 实际出图 | 两路各 45–50 帧 640×480 JPEG；后摄中心 `ff0c0a0d`、前摄 `ff777777`，内容不同 | 未测（无权限） | 与特性一致的全尺寸照片 | ✅ 已是宿主相机真实帧；仍只测 640×480 |
+| features | camera.full/raw/manual_sensor/autofocus/flash/front | 同左 + NFC/指纹等 | 同左 | ⚠️ 全尺寸与 RAW 输出未实测 |
 
-宿主相机直通（`vine_camera` → `camera_shim`）尚未让真实帧进入 guest，探针拿到的是回落测试场景。
+宿主相机直通（`vine_camera` → `camera_shim`）现在能拿到真实帧：`camera.capture.0/1`
+各 45–50 帧且两路内容不同，不再是同一张测试图。探针为省时只采 640×480；全尺寸
+4032×3024 / 3264×2448 与 RAW 输出尚未验证。Pixel 5 的第三颗 16MP 超广角没有暴露
+（`camera.ids=0,1`）。
 
 ## 5. 网络
 
 | 字段 | 子系统 | 真机 PHK110 | Pixel 5 参照 | 判定 |
 |---|---|---|---|---|
 | net.info / iface | `1 WIFI CONNECTED` / wlan0 | 同左 | 同左 | ✅ |
-| net.interfaces | `dummy0 wlan0 lo` | `rmnet_data0 dummy0 wlan0 rmnet_data1 lo vgate0 ifb0 ifb2 ifb1` | 无 SIM 时仍有 dummy0、rmnet_*、ifb* | ❌ 缺 rmnet_* / ifb* |
+| net.interfaces | `dummy0 wlan0 ifb0 lo ifb1` | `rmnet_data0 dummy0 wlan0 rmnet_data1 lo vgate0 ifb0 ifb2 ifb1` | ★ 无 SIM 时形态未核对 | ⚠️ ifb 已补；`rmnet_*` 有意不列（见下） |
 | wifi.enabled / sticky | true / 3 | true / 3 | true / 3 | ✅ |
-| wifi.ssid / scan | `"Xiaomi_145D"`；5 个 AP | `<unknown ssid>`；空 | 有定位权限时可见 | ⚠️ 真机无权限，不可比 |
-| wifi.info | `64:09:80:aa:14:5d` / id=0，IP 192.168.31.105 | `02:00…` / -1 | 有定位权限时为真值 | ⚠️ 不可比 |
+| wifi.ssid / scan | `"Xiaomi_7713"`；5 个 AP | `<unknown ssid>`；空 | 有定位权限时可见 | ⚠️ 真机无权限，不可比 |
+| wifi.info | `64:09:80:60:77:13` / id=0，IP 192.168.31.105 | `02:00…` / -1 | 有定位权限时为真值 | ⚠️ 不可比 |
 | net.caps（默认回调） | SSID `<unknown ssid>`、BSSID `02:00…`、Net ID -1 | 同左 | 同左 | ✅ |
-| net.caps.withLocation | `"Xiaomi_145D" 64:09:80:aa:14:5d id=0` | 未测 | 带位置标志时为真值 | ✅ 与 ConnectionInfo 一致 |
+| net.caps.withLocation | `"Xiaomi_7713" 64:09:80:60:77:13 id=0` | 未测 | 带位置标志时为真值 | ✅ 与 ConnectionInfo 一致 |
+
+`rmnet_data*` 仍不列：没有 SIM 时这些 link 是 down 且没有地址，`NetworkInterface`
+只列有地址的接口；真机列的 `rmnet_*` 是插卡状态。要证伪需要一台真·无 SIM 手机做参照。
 
 ## 6. 图形
 
@@ -141,6 +148,11 @@ Linear Acceleration、Orientation）。
 字符串层面已对齐；渲染仍由 ANGLE-on-Vulkan 完成，渲染时序、shader 编译行为与
 原生 Adreno 驱动不同，属字符串伪装改不到的层面。
 
+扩展集仍有差异：子系统 124 个（ANGLE 的集合经过滤），真机 104 个；缺
+`GL_OES_tessellation_shader`、`GL_OES_gpu_shader5`（只有 EXT 别名）。另有一个
+非标准属性 `ro.egl.hal.impl=angle`（libEGL 改名后靠它加载 ANGLE）；探针未查该键，
+应用若直接读 `SystemProperties` 可能看到 angle，待确认。
+
 ## 7. 文件系统、/proc 与权限面
 
 | 项 | 子系统 | 真机 PHK110 | Pixel 5 参照 | 判定 |
@@ -148,23 +160,33 @@ Linear Acceleration、Orientation）。
 | /proc/version、osrelease | EACCES | EACCES | 现代 Android 同样拒绝 | ✅ 非差异 |
 | /proc/tty/drivers | 空 | 无 goldfish/virtio | 无 | ✅ |
 | /proc/self/maps、mountinfo 标记 | 空 | 大量 oplus（宿主机型） | 应为空 | ✅ |
-| /proc/self/mounts 行数 | 93（含 dm-*、f2fs /data） | 218 | 真机约 200+ | ❌ 仍偏少 |
+| /proc/self/mounts 行数 | 104（含 dm-*、f2fs /data） | 218 | 真机约 200+（Pixel 5 实际行数未核对） | ❌ 仍偏少 |
 | /proc/self/cgroup | v1 memory/cpuset/cpu/blkio + `0::/uid_…/pid_…` | v1 多行 + `0::` | — | ✅ |
 | /proc/self/status | Seccomp=2 / filters=1 / NoNewPrivs=1 / TracerPid=0 | filters=1 / NoNewPrivs=0（可调试） | 非调试应用 NoNewPrivs=1 | ✅ |
 | 列 /dev | EACCES | EACCES | ★ 应用不可列 | ✅ |
-| /dev/socket | 31 项，含 location、wpa_wlan0、qmux_radio、ims_*、usap_pool_primary、zygote；无 zygote_secondary | 55+ 项（含 OnePlus 私有、vendor_wpa_wlan0、zygote_secondary） | 64 位 + 32 位机型应有 zygote_secondary | ❌ 缺 zygote_secondary（32 位应用能否运行待核对） |
-| /vendor/etc/init / /vendor/bin/hw / /vendor/lib64/hw | 14 / 12 / 32 项 | 110 / — / — | ★ 真机 vendor 显著更多 | ❌ |
+| /dev/socket | 33 项，含 location、wpa_wlan0、qmux_radio、ims_*、usap_pool_primary、zygote；无 zygote_secondary | 55+ 项（含 OnePlus 私有、vendor_wpa_wlan0、zygote_secondary） | Pixel 5 的 `init.zygote64_32.rc` 有 zygote_secondary | ❌ 缺 zygote_secondary；根因是 guest 镜像 arm64-only |
+| /vendor/etc/init / /vendor/bin/hw / /vendor/lib64/hw | 86 / 51 / 30 项 | 110 / — / — | Pixel 5 工厂镜像 87 / 53 / 36 | ✅（lib64/hw 少 6 项） |
 | ls /system/bin | 414 项 | unreadable | 未核对 | ⚠️ |
 | env.extra | 仅 TMPDIR | 大量 ColorOS 变量 | 少量 | ✅ |
 | `exists.*` / `file.*` 标记文件 | 全 false | 全 false | 全 false | ✅ |
+
+Pixel 5 的工厂 `system.img` 含 32 位库（`ro.system.product.cpu.abilist32=armeabi-v7a,armeabi`）
+和 `init.zygote64_32.rc`，所以 `zygote_secondary` 是真差异，不是参照机型选错。补一个
+同名 socket 只能骗过目录列表；真正补 32 位需要 32 位 system libs 和 32 位 tawcroot。
+`vendor_wpa_wlan0` **不需要**：Pixel 5 的 supplicant rc 用 `-g@android:wpa_wlan0`，
+`vendor_wpa_wlan0` 是 OnePlus 的命名。
 
 ## 8. 包
 
 | 项 | 子系统 | 真机 PHK110 | Pixel 5 参照 | 判定 |
 |---|---|---|---|---|
-| 应用可见包数 | 138 | 481 | 出厂含 GMS，显著更多 | ❌ |
-| GMS / Play / Chrome / Pixel 应用 | 无 | 有 Google 套件 | ★ 有 | ❌（用户未要求补齐） |
+| 应用可见包数 | 162 | 481 | 出厂含 GMS，显著更多 | ⚠️ 仍少（用户未要求 GMS） |
+| GMS / Play / Chrome / Pixel 应用 | Chrome / TrichromeLibrary（无 GMS） | 有 Google 套件 | ★ 有 | ⚠️ Chrome 已装；GMS 未补 |
 | 应用可见的 LineageOS 包 | 无 | 无 | 无 | ✅ |
+
+Chrome / TrichromeLibrary 的 APK 内有 `lib/arm64-v8a/libmonochrome_64.so`（此前记录的
+“只有 v7a”已不成立）；文件来自 `files/system-apps`，按 Pixel 5 `product.img` 的目录布局安装。
+没有装 GoogleCamera。
 
 ## 9. 电话与蓝牙（无 SIM，有意保留）
 
@@ -173,7 +195,7 @@ Linear Acceleration、Orientation）。
 | gsm.sim.state / tel.simState | ABSENT / 1 | LOADED,ABSENT / 5 | ABSENT / 1 | ✅ |
 | tel.phoneType / voice / sms | 1 / true / true | 同左 | 同左 | ✅ |
 | networkOperator 等 | 空 | 46001 / 中国联通 / cn | 空 | ✅ |
-| serviceState | null | SecurityException（无权限） | ★ 无 SIM 时预期 OUT_OF_SERVICE / 仅紧急呼叫 | ❌ 预期非 null，待真机复核 |
+| serviceState | null | SecurityException（无权限） | AOSP 13 无 SIM 时为 null | ✅ 非差异（已核对 AOSP 源码） |
 | phoneCount / modems | 1 / supported=1 active=1 | 2 | 实体卡 + eSIM，supported 预期 2 | ⚠️ 待核对 |
 | gsm.version.ril-impl | Qualcomm RIL 1.0 | 同左 | 同左 | ✅ |
 | bt | 关闭，name=Pixel 5，addr 02:00…（应用无 LOCAL_MAC 权限时的正常值） | — | 同左 | ⚠️ 开启后的行为未测 |
@@ -186,6 +208,10 @@ Linear Acceleration、Orientation）。
 - **真实内核 5.10**：`uname` 显示 4.19，但 `pidfd_open`、`close_range` 等 5.x 才有的
   系统调用可用，应用可据此反推内核版本。
 - **性能与时序**：CPU 跑分远高于 765G；tawcroot 处理系统调用带来的额外延迟可被计时测出。
+- **相机全尺寸**：探针为省时只采 640×480，4032×3024 / 3264×2448 与 RAW 输出没有覆盖；
+  声明 level full/raw 与全尺寸实际出图是否一致仍未知。
+- **mount 行数的参照**：218 行来自 Android 16 的 OnePlus 真机，不是 Pixel 5；
+  Pixel 5 的实际行数未核对，只能作量级参照。
 - `<<MARK` 只匹配「值」，`pkg.<包名>` 的包名在 key 上不会被标记。
 - 真机侧 `pm grant` 不可用，权限相关字段只能等真机 UI 授权或换测试设备。
 
@@ -196,6 +222,9 @@ Linear Acceleration、Orientation）。
 ```sh
 scripts/probe/run.sh
 ```
+
+报告写出后探针会停在实时读数页，等 guest 里点「关闭」（`files/closed`）；`run.sh`
+要到它退出才卸载。界面不可见时用 `am force-stop dev.probe.env` 结束。
 
 真机（同一份 `scripts/probe/src`，构建时加 `android:debuggable="true"`，并申请
 `CAMERA`、`READ_PHONE_STATE`、`ACCESS_FINE_LOCATION`、`BLUETOOTH_CONNECT` 等权限）：
@@ -214,7 +243,7 @@ adb uninstall dev.probe.env
 
 ## 参考来源
 
-- Google Pixel 工厂镜像/OTA（TQ3A.230901.001.C2 的 bootloader、radio）：
+- Google Pixel 工厂镜像/OTA（TQ3A.230901.001.C2 的 bootloader、radio、kernel）：
   <https://developers.google.com/android/images>
 - 2023-09 Pixel 更新与 `.C2`（Verizon）版本：
   <https://9to5google.com/2023/09/18/android-13-september-pixel-update/>
@@ -222,12 +251,12 @@ adb uninstall dev.probe.env
   <https://devicehelp.optus.com.au/google/pixel-5-android-11-0/specifications>
 - Pixel 5 `ro.product.first_api_level=30`：
   <https://xdaforums.com/t/pixelflasher-for-google-pixel-5-support-thread.4419577/page-10>
-- redfin 公开内核串（4.19.278-g…）：
-  <https://github.com/7waynelee/pixel5-kernelsu-next>
+- 工厂 `boot.img` 内核串（`4.19.269-g8728c337137c-ab10161573`，本次已核对）：
+  `image-redfin-tq3a.230901.001.c2.zip` 中的 `boot.img`
 - 2023-09 构建的 security_patch 仍为 2023-09-01（该版本特例）：
   <https://www.nobsbitcoin.com/grapheneos-v2023091800/>
 
-## 附录 A：子系统探针原始输出（2026-11-24 21:45，1b7ad96 + 未提交改动）
+## 附录 A：子系统探针原始输出（2026-11-25 10:05，93000b2）
 
 ```text
 Build.MODEL=Pixel 5
@@ -245,6 +274,7 @@ Build.DISPLAY=TQ3A.230901.001.C2
 Build.SOC=QTI SM7250
 Build.radio=g7250-00258-230518-B-10157620
 os.version=4.19.269-g8728c337137c-ab10161573
+time.build=4 ms
 prop.waydroid.display_width=
 prop.waydroid.stub_sensors_hal=
 prop.ro.lineage.version=
@@ -271,6 +301,7 @@ prop.ro.secure=1
 prop.ro.debuggable=0
 prop.ro.boot.verifiedbootstate=green
 prop.ro.boot.flash.locked=1
+time.props=3 ms
 tel.simState=1
 tel.phoneType=1
 tel.networkOperator=
@@ -282,29 +313,38 @@ tel.smsCapable=true
 tel.phoneCount=1
 tel.serviceState=null
 tel.activeSubs=0
+time.telephony=249 ms
 net.info=1 WIFI CONNECTED
 net.caps=transportInfo=SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, IP: /192.168.31.105, Security type: 2, Supplicant state: COMPLETED, Wi-Fi standard: 5, RSSI: -52, Link speed: 866Mbps, Tx Link speed: 866Mbps, Max Supported Tx Link speed: 866Mbps, Rx Link speed: 780Mbps, Max Supported Rx Link speed: 866Mbps, Frequency: 5180MHz, Net ID: -1, Metered hint: false, score: 0, isUsable: true, CarrierMerged: false, SubscriptionId: -1, IsPrimary: -1, Trusted: false, Restricted: false, Ephemeral: false, OEM paid: false, OEM private: false, OSU AP: false, FQDN: <none>, Provider friendly name: <none>, Requesting package name: <none><none>MLO Information: , AP MLD Address: <none>, AP MLO Link Id: <none>, AP MLO Affiliated links: <none> specifier=null
 net.wifi=true
 net.ethernet=false
 net.cellular=false
 net.iface=wlan0
-net.interfaces=dummy0 wlan0 lo 
+net.interfaces=dummy0 wlan0 ifb0 lo ifb1
 wifi.enabled=true
-wifi.ssid="Xiaomi_145D"
-wifi.scan=Xiaomi_145D/-52 Xiaomi_145D/-47 CMCC-220A/-81 TP-LINK_F0B4/-83 HUAWEI-7F16/-74 
+wifi.ssid="Xiaomi_7713"
+wifi.scan=Xiaomi_7713/-52 Xiaomi_7713/-47 ChinaNet-D2C3/-70 CMCC-22FC/-81 TP-LINK_3F52/-74 HUAWEI-7E1D/-86
 wifi.sticky=3
 wifi.startScan=true broadcast=updated=true
-wifi.info=64:09:80:aa:14:5d rssi=-52 866Mbps 5180MHz std=5 id=0 COMPLETED ip=1763682496 mac=02:00:00:00:00:00
+wifi.info=64:09:80:60:77:13 rssi=-52 866Mbps 5180MHz std=5 id=0 COMPLETED ip=1763682496 mac=02:00:00:00:00:00
+time.network=2400 ms
 sensor.1=LSM6DSR Accelerometer | STMicro | mode=0
 sensor.4=LSM6DSR Gyroscope | STMicro | mode=0
 sensor.2=LIS2MDL Magnetometer | STMicro | mode=0
+sensor.1.wakeup=LSM6DSR Accelerometer Wakeup | STMicro | mode=0
+sensor.4.wakeup=LSM6DSR Gyroscope Wakeup | STMicro | mode=0
 sensor.8.wakeup=TCS3701 Proximity | AMS | mode=1
 sensor.5=TCS3701 Ambient Light | AMS | mode=1
 sensor.6=BMP380 Barometer | Bosch | mode=0
+sensor.2.wakeup=LIS2MDL Magnetometer Wakeup | STMicro | mode=0
 sensor.14=LIS2MDL Magnetometer Uncalibrated | STMicro | mode=0
 sensor.16=LSM6DSR Gyroscope Uncalibrated | STMicro | mode=0
 sensor.19=Step Counter | Google | mode=1
 sensor.18=Step Detector | Google | mode=3
+sensor.17.wakeup=Significant Motion | Google | mode=2
+sensor.5.wakeup=TCS3701 Ambient Light Wakeup | AMS | mode=1
+sensor.6.wakeup=BMP380 Barometer Wakeup | Bosch | mode=0
+sensor.19.wakeup=Step Counter Wakeup | Google | mode=1
 sensor.35=LSM6DSR Accelerometer Uncalibrated | STMicro | mode=0
 sensor.15=Game Rotation Vector Sensor | AOSP | mode=0
 sensor.20=GeoMag Rotation Vector Sensor | AOSP | mode=0
@@ -312,17 +352,42 @@ sensor.9=Gravity Sensor | AOSP | mode=0
 sensor.10=Linear Acceleration Sensor | AOSP | mode=0
 sensor.11=Rotation Vector Sensor | AOSP | mode=0
 sensor.3=Orientation Sensor | AOSP | mode=0
+sensor.read.1=LSM6DSR Accelerometer | events=89 | 1.122 -0.004 9.773
+sensor.read.4=LSM6DSR Gyroscope | events=89 | -0.001 0.000 0.000
+sensor.read.2=LIS2MDL Magnetometer | events=88 | 36.500 2.813 -70.625
+sensor.read.1.wakeup=LSM6DSR Accelerometer Wakeup | events=115 | 1.117 -0.009 9.754
+sensor.read.4.wakeup=LSM6DSR Gyroscope Wakeup | events=88 | 0.000 0.000 0.000
+sensor.read.8.wakeup=TCS3701 Proximity | events=1 | 5.000
+sensor.read.5=TCS3701 Ambient Light | events=39 | 127.500
+sensor.read.6=BMP380 Barometer | events=86 | 1011.750
+sensor.read.2.wakeup=LIS2MDL Magnetometer Wakeup | events=543 | 37.313 1.813 -69.500
+sensor.read.14=LIS2MDL Magnetometer Uncalibrated | events=85 | -82.375 8.813 -204.625
+sensor.read.16=LSM6DSR Gyroscope Uncalibrated | events=1084 | -0.000 0.000 0.002
+sensor.read.19=Step Counter | events=1 | 0.000
+sensor.read.18=Step Detector | events=0 | -
+sensor.read.5.wakeup=TCS3701 Ambient Light Wakeup | events=38 | 127.500
+sensor.read.6.wakeup=BMP380 Barometer Wakeup | events=83 | 1011.750
+sensor.read.19.wakeup=Step Counter Wakeup | events=1 | 0.000
+sensor.read.35=LSM6DSR Accelerometer Uncalibrated | events=82 | 1.122 -0.028 9.768
+sensor.read.15=Game Rotation Vector Sensor | events=190 | 0.039 -0.042 0.686
+sensor.read.20=GeoMag Rotation Vector Sensor | events=190 | 0.039 -0.042 0.686
+sensor.read.9=Gravity Sensor | events=188 | 1.118 -0.016 9.743
+sensor.read.10=Linear Acceleration Sensor | events=188 | 0.004 0.011 0.030
+sensor.read.11=Rotation Vector Sensor | events=188 | 0.039 -0.042 0.686
+sensor.read.3=Orientation Sensor | events=186 | 273.192 0.091 6.550
+time.sensors=6207 ms
 gl.vendor=Qualcomm
 gl.renderer=Adreno (TM) 620
 gl.version=OpenGL ES 3.2 V@0490.0 (GIT@4783c89, I46ff5fc46f, 1606807783) (Date:11/30/20)
 gl.extensions=124 num=124 angle=false
 egl.vendor=Android
-gl.es32ext=GL_EXT_geometry_shader=1 GL_OES_geometry_shader=1 GL_EXT_tessellation_shader=1 GL_OES_tessellation_shader=0 GL_EXT_gpu_shader5=1 GL_OES_gpu_shader5=0 GL_KHR_blend_equation_advanced=1 GL_OES_sample_shading=1 GL_OES_texture_buffer=1 GL_EXT_texture_cube_map_array=1 
+gl.es32ext=GL_EXT_geometry_shader=1 GL_OES_geometry_shader=1 GL_EXT_tessellation_shader=1 GL_OES_tessellation_shader=0 GL_EXT_gpu_shader5=1 GL_OES_gpu_shader5=0 GL_KHR_blend_equation_advanced=1 GL_OES_sample_shading=1 GL_OES_texture_buffer=1 GL_EXT_texture_cube_map_array=1
 gl.context32=ok
+time.gl=245 ms
 proc.version=ERR FileNotFoundException: /proc/version: open failed: EACCES (Permission denied)
-proc.cpuinfo.hardware=CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x804 ; CPU part	: 0x804 ; Hardware	: Qualcomm Technologies, Inc LITO ; 
-proc.mounts.lines=93
-proc.mounts.all=/dev/block/dm-6 / ext4 ro,seclabel,relatime 0 0|tmpfs /dev tmpfs rw,seclabel,nosuid,relatime,size=3806154k,nr_inodes=951538,mode=755 0 0|devpts /dev/pts devpts rw,seclabel,relatime,mode=600,ptmxmode=000 0 0|proc /proc proc rw,relatime,gid=3009,hidepid=invisible 0 0|sysfs /sys sysfs rw,seclabel,relatime 0 0|selinuxfs /sys/fs/selinux selinuxfs rw,relatime 0 0|tmpfs /mnt rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|tmpfs /mnt/installer rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|tmpfs /mnt/androidwritable rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|/dev/block/dm-7 /system_ext ext4 ro,seclabel,relatime 0 0|/dev/block/dm-8 /vendor ext4 ro,seclabel,relatime 0 0|/dev/block/dm-9 /product ext4 ro,seclabel,relatime 0 0|/dev/block/dm-10 /vendor_dlkm ext4 ro,seclabel,relatime 0 0|tmpfs /apex rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755 0 0|tmpfs /linker_config rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755 0 0|none /dev/blkio cgroup rw,nosuid,nodev,noexec,relatime,blkio 0 0|none /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime,memory_recursiveprot 0 0|none /dev/cpuctl cgroup rw,nosuid,nodev,noexec,relatime,cpu 0 0|none /dev/cpuset cgroup rw,nosuid,nodev,noexec,relatime,cpuset,noprefix,release_agent=/sbin/cpuset_release_agent 0 0|none /dev/memcg cgroup rw,nosuid,nodev,noexec,relatime,memory 0 0|none /dev/stune cgroup rw,nosuid,nodev,noexec,relatime,schedtune 0 0|tracefs /sys/kernel/tracing tracefs rw,seclabel,relatime,gid=3012 0 0|pstore /sys/fs/pstore pstore rw,seclabel,nosuid,nodev,noexec,relatime 0 0|bpf /sys/fs/bpf bpf rw,nosuid,nodev,noexec,relatime 0 0|none /config configfs rw,nosuid,nodev,noexec,relatime 0 0|binder /dev/binderfs binder rw,relatime,max=1048576,stats=global 0 0|/dev/block/sda10 /metadata ext4 rw,seclabel,nosuid,nodev,noatime,discard,nodelalloc,commit=1,data=journal 0 0|/dev/block/dm-38 /data f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|tmpfs /data_mirror rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|/dev/block/dm-38 /data_mirror/data_ce/null f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/data_de/null f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/misc_ce/null f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/misc_de/null f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/cur_profiles f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/ref_profiles f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/data_ce/null/0 f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/user/0 f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-11 /apex/com.android.adbd@331728000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-11 /apex/com.android.adbd ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-12 /apex/com.android.adservices@333834000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-12 /apex/com.android.adservices ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-13 /apex/com.android.appsearch@338550000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-13 /apex/com.android.appsearch ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-14 /apex/com.android.art@338480000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-14 /apex/com.android.art ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-15 /apex/com.android.btservices@339989000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-15 /apex/com.android.btservices ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-16 /apex/com.android.conscrypt@331702000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-16 /apex/com.android.conscrypt ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-17 /apex/com.android.extservices@334490000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-17 /apex/com.android.extservices ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-18 /apex/com.android.i18n@334499000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-18 /apex/com.android.i18n ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-19 /apex/com.android.ipsec@338355000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-19 /apex/com.android.ipsec ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-20 /apex/com.android.media@337853000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-20 /apex/com.android.media ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-21 /apex/com.android.media.swcodec@333299000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-21 /apex/com.android.media.swcodec ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-22 /apex/com.android.mediaprovider@333428000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-22 /apex/com.android.mediaprovider ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-23 /apex/com.android.neuralnetworks@337595000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-23 /apex/com.android.neuralnetworks ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-24 /apex/com.android.ondevicepersonalization@331672000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-24 /apex/com.android.ondevicepersonalization ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-25 /apex/com.android.os.statsd@335948000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-25 /apex/com.android.os.statsd ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-26 /apex/com.android.permission@336420000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-26 /apex/com.android.permission ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-27 /apex/com.android.resolv@337866000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-27 /apex/com.android.resolv ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-28 /apex/com.android.runtime@334613000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-28 /apex/com.android.runtime ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-29 /apex/com.android.scheduling@334821000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-29 /apex/com.android.scheduling ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-30 /apex/com.android.sdkext@336820000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-30 /apex/com.android.sdkext ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-31 /apex/com.android.tethering@335365000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-31 /apex/com.android.tethering ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-32 /apex/com.android.tzdata@338173000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-32 /apex/com.android.tzdata ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-33 /apex/com.android.uwb@334543000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-33 /apex/com.android.uwb ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-34 /apex/com.android.vndk.current@332185000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-34 /apex/com.android.vndk.current ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-35 /apex/com.android.wifi@336334000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-35 /apex/com.android.wifi ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/fuse /mnt/user/0/emulated fuse rw,lazytime,nosuid,nodev,noexec,noatime,user_id=0,group_id=0,allow_other 0 0|/dev/fuse /storage/emulated fuse rw,lazytime,nosuid,nodev,noexec,noatime,user_id=0,group_id=0,allow_other 0 0|/dev/block/dm-38 /data/misc/profiles/cur f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/misc/profiles/ref f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/misc/profiles/cur/0/dev.probe.env f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/misc/profiles/ref/dev.probe.env f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|
+proc.cpuinfo.hardware=CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x805 ; CPU part	: 0x804 ; CPU part	: 0x804 ; Hardware	: Qualcomm Technologies, Inc LITO ;
+proc.mounts.lines=104
+proc.mounts.all=/dev/block/dm-6 / ext4 ro,seclabel,relatime 0 0|tmpfs /dev tmpfs rw,seclabel,nosuid,relatime,size=3806154k,nr_inodes=951538,mode=755 0 0|devpts /dev/pts devpts rw,seclabel,relatime,mode=600,ptmxmode=000 0 0|proc /proc proc rw,relatime,gid=3009,hidepid=invisible 0 0|sysfs /sys sysfs rw,seclabel,relatime 0 0|selinuxfs /sys/fs/selinux selinuxfs rw,relatime 0 0|tmpfs /mnt rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|tmpfs /mnt/installer rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|tmpfs /mnt/androidwritable rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|/dev/block/dm-7 /system_ext ext4 ro,seclabel,relatime 0 0|/dev/block/dm-8 /vendor ext4 ro,seclabel,relatime 0 0|/dev/block/dm-9 /product ext4 ro,seclabel,relatime 0 0|tmpfs /apex rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755 0 0|tmpfs /linker_config rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755 0 0|none /dev/blkio cgroup rw,nosuid,nodev,noexec,relatime,blkio 0 0|none /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime,memory_recursiveprot 0 0|none /dev/cpuctl cgroup rw,nosuid,nodev,noexec,relatime,cpu 0 0|none /dev/cpuset cgroup rw,nosuid,nodev,noexec,relatime,cpuset,noprefix,release_agent=/sbin/cpuset_release_agent 0 0|none /dev/memcg cgroup rw,nosuid,nodev,noexec,relatime,memory 0 0|none /dev/stune cgroup rw,nosuid,nodev,noexec,relatime,schedtune 0 0|tracefs /sys/kernel/tracing tracefs rw,seclabel,relatime,gid=3012 0 0|pstore /sys/fs/pstore pstore rw,seclabel,nosuid,nodev,noexec,relatime 0 0|bpf /sys/fs/bpf bpf rw,nosuid,nodev,noexec,relatime 0 0|none /config configfs rw,nosuid,nodev,noexec,relatime 0 0|binder /dev/binderfs binder rw,relatime,max=1048576,stats=global 0 0|/dev/block/sda10 /metadata ext4 rw,seclabel,nosuid,nodev,noatime,discard,nodelalloc,commit=1,data=journal 0 0|/dev/block/sde41 /vendor/firmware_mnt vfat ro,context=u:object_r:firmware_file:s0,relatime,gid=1000,fmask=0337,dmask=0227,codepage=437,iocharset=iso8859-1,shortname=lower,errors=remount-ro 0 0|/dev/block/sda2 /mnt/vendor/persist ext4 rw,seclabel,nosuid,nodev,noatime 0 0|fusectl /sys/fs/fuse/connections fusectl rw,relatime 0 0|/dev/block/dm-38 /data f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|tmpfs /data_mirror rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|/dev/block/dm-38 /data_mirror/data_ce/null f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/data_de/null f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/misc_ce/null f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/misc_de/null f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/cur_profiles f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/ref_profiles f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data_mirror/data_ce/null/0 f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/user/0 f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-10 /apex/com.android.apex.cts.shim@1 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-10 /apex/com.android.apex.cts.shim ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-11 /apex/com.android.i18n@1 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-11 /apex/com.android.i18n ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-12 /apex/com.android.runtime@1 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-12 /apex/com.android.runtime ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-13 /apex/com.android.vndk.v33@1 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-13 /apex/com.android.vndk.v33 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-14 /apex/com.android.adbd@331314022 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-14 /apex/com.android.adbd ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-15 /apex/com.android.adservices@331418080 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-15 /apex/com.android.adservices ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-16 /apex/com.android.appsearch@331311000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-16 /apex/com.android.appsearch ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-17 /apex/com.android.art@331413030 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-17 /apex/com.android.art ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-18 /apex/com.android.btservices@331716000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-18 /apex/com.android.btservices ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-19 /apex/com.android.cellbroadcast@331411000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-19 /apex/com.android.cellbroadcast ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-20 /apex/com.android.conscrypt@331411000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-20 /apex/com.android.conscrypt ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-21 /apex/com.android.extservices@331412000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-21 /apex/com.android.extservices ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-22 /apex/com.android.ipsec@331310000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-22 /apex/com.android.ipsec ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-23 /apex/com.android.media@331410000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-23 /apex/com.android.media ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-24 /apex/com.android.media.swcodec@331410000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-24 /apex/com.android.media.swcodec ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-25 /apex/com.android.mediaprovider@331412040 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-25 /apex/com.android.mediaprovider ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-26 /apex/com.android.neuralnetworks@331310000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-26 /apex/com.android.neuralnetworks ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-27 /apex/com.android.ondevicepersonalization@330442000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-27 /apex/com.android.ondevicepersonalization ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-28 /apex/com.android.os.statsd@331311000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-28 /apex/com.android.os.statsd ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-29 /apex/com.android.permission@331411000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-29 /apex/com.android.permission ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-30 /apex/com.android.resolv@331314010 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-30 /apex/com.android.resolv ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-31 /apex/com.android.scheduling@331111000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-31 /apex/com.android.scheduling ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-32 /apex/com.android.sdkext@331410000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-32 /apex/com.android.sdkext ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-33 /apex/com.android.tethering@331412110 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-33 /apex/com.android.tethering ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-34 /apex/com.android.tzdata@331314010 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-34 /apex/com.android.tzdata ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-35 /apex/com.android.uwb@331410010 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-35 /apex/com.android.uwb ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-36 /apex/com.android.wifi@331414000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-36 /apex/com.android.wifi ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-37 /apex/com.google.mainline.primary.libs@331434000 ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/block/dm-37 /apex/com.google.mainline.primary.libs ext4 ro,dirsync,seclabel,nodev,noatime 0 0|/dev/fuse /mnt/user/0/emulated fuse rw,lazytime,nosuid,nodev,noexec,noatime,user_id=0,group_id=0,allow_other 0 0|tmpfs /storage rw,seclabel,nosuid,nodev,noexec,relatime,size=3806154k,nr_inodes=951538,mode=755,gid=1000 0 0|/dev/fuse /storage/emulated fuse rw,lazytime,nosuid,nodev,noexec,noatime,user_id=0,group_id=0,allow_other 0 0|/dev/block/dm-38 /storage/emulated/0/Android/data f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /storage/emulated/0/Android/obb f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/misc/profiles/cur f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/misc/profiles/ref f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/misc/profiles/cur/0/dev.probe.env f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|/dev/block/dm-38 /data/misc/profiles/ref/dev.probe.env f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0|
 proc.mounts.0=/dev/block/dm-38 /data/misc/profiles/cur/0/dev.probe.env f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0
 proc.mounts.1=/dev/block/dm-38 /data/misc/profiles/ref/dev.probe.env f2fs rw,lazytime,seclabel,nosuid,nodev,noatime,background_gc=on,discard,no_heap,user_xattr,inline_xattr,acl,inline_data,inline_dentry,flush_merge,extent_cache,mode=adaptive,active_logs=6,reserve_root=32768,resuid=0,resgid=1065,inlinecrypt,alloc_mode=default,checkpoint_merge,fsync_mode=nobarrier 0 0
 file./dev/qemu_pipe=false
@@ -338,30 +403,30 @@ file./system/bin/wificond=true
 file./vendor/etc/init/vine-radio.rc=false
 file./proc/tty/drivers=true
 proc.tty.drivers=
-ls./=37 entries 
-ls./system=15 entries 
-ls./system/bin=414 entries 
-ls./system/bin/hw=2 entries 
-ls./system/etc/init=61 entries 
-ls./system/lib64=667 entries 
-ls./system/addon.d=0 entries 
-ls./vendor=11 entries 
-ls./vendor/bin/hw=12 entries 
-ls./vendor/etc/init=14 entries 
-ls./vendor/lib64=109 entries 
-ls./vendor/lib64/hw=32 entries 
-ls./product/etc=11 entries 
-ls./product/etc/init=1 entries 
-ls./product/etc/permissions=4 entries 
-ls./system_ext/etc/init=1 entries 
-ls./system_ext/etc/permissions=10 entries 
-ls./vendor/etc/permissions=25 entries 
-ls./vendor/etc/vintf/manifest=6 entries 
+ls./=37 entries
+ls./system=15 entries
+ls./system/bin=414 entries
+ls./system/bin/hw=2 entries
+ls./system/etc/init=61 entries
+ls./system/lib64=667 entries
+ls./system/addon.d=0 entries
+ls./vendor=21 entries
+ls./vendor/bin/hw=51 entries
+ls./vendor/etc/init=86 entries
+ls./vendor/lib64=736 entries
+ls./vendor/lib64/hw=30 entries
+ls./product/etc=13 entries
+ls./product/etc/init=1 entries
+ls./product/etc/permissions=7 entries
+ls./system_ext/etc/init=1 entries
+ls./system_ext/etc/permissions=10 entries
+ls./vendor/etc/permissions=57 entries
+ls./vendor/etc/vintf/manifest=33 entries
 dir./run=unreadable
 dir./run/user/1000=unreadable
 dir./dev/socket=adbd audioserver chre dnsproxyd fwmarkd ims_datad ims_qmid lmkd location logd logdr logdw mdns mdnsd msm_irqbalance netmgr port-bridge pps prng_seeder property_service qmux_radio qwes_ipc ssgtzd statsdw tombstoned_crash tombstoned_intercept tombstoned_java_trace traced_consumer traced_producer usap_pool_primary wifihal wpa_wlan0 zygote
 dir./dev=unreadable
-env.extra=TMPDIR=/data/user/0/dev.probe.env/cache 
+env.extra=TMPDIR=/data/user/0/dev.probe.env/cache
 exists./vendor/waydroid.prop=false
 exists./system/etc/init/init.waydroid.rc=false
 exists./product/etc/vine=false
@@ -369,38 +434,40 @@ exists./system/bin/vine_lmkd=false
 exists./vendor/lib64/libcuttlefish_fs.so=false
 exists./system/addon.d/50-lineage.sh=false
 proc.self.maps.marks=
+time.files=748 ms
 display=1080x2340 dpi=440 xdpi=440.0
-display.mode={id=1, width=1080, height=2340, fps=90.0, alternativeRefreshRates=[]}
+display.mode={id=1, width=1080, height=2340, fps=60.000004, alternativeRefreshRates=[90.0]}
 mem.total=7795003392
-proc.meminfo=MemTotal:        7612303 kB ; MemFree:           70738 kB ; MemAvailable:    1458147 kB ; 
-statfs.data=118648471552 free=80833437696
+proc.meminfo=MemTotal:        7612303 kB ; MemFree:           78413 kB ; MemAvailable:    2141981 kB ;
+statfs.data=118648471552 free=78663790592
 runtime.cpus=8
-cpufreq=0:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 1:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 2:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 3:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 4:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 5:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 6:2208000/652800 rel=6 midr=0x0000000051ff804e; 7:2400000/806400 rel=7 midr=0x0000000051ff804e; 
+cpufreq=0:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 1:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 2:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 3:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 4:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 5:1804800/300000 rel=0 1 2 3 4 5 midr=0x00000000517f805e; 6:2208000/652800 rel=6 midr=0x0000000051ff804e; 7:2400000/806400 rel=7 midr=0x0000000051ff804e;
 cpufreq.policies=policy0 policy6 policy7
 sys.cpu.possible=0-7 online=0-7
 proc.cpuinfo.full=processor	: 0|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 1|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 2|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 3|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 4|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 5|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0x7|CPU part	: 0x805|CPU revision	: 14||processor	: 6|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0xf|CPU part	: 0x804|CPU revision	: 14||processor	: 7|BogoMIPS	: 38.40|Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp|CPU implementer	: 0x51|CPU architecture: 8|CPU variant	: 0xf|CPU part	: 0x804|CPU revision	: 14||Hardware	: Qualcomm Technologies, Inc LITO|
 uname.osrelease=ERR FileNotFoundException: /proc/sys/kernel/osrelease: open failed: EACCES (Permission denied)
 uname=4.19.269-g8728c337137c-ab10161573 | #1 SMP PREEMPT Thu May 18 11:19:41 UTC 2023
-proc.self.cgroup=4:memory:/|3:cpuset:/top-app|2:cpu:/top-app|1:blkio:/|0::/uid_10118/pid_32574|
+proc.self.cgroup=4:memory:/|3:cpuset:/top-app|2:cpu:/top-app|1:blkio:/|0::/uid_10139/pid_8783|
 proc.self.mountinfo.marks=
-proc.self.status=TracerPid:	0 ; NoNewPrivs:	1 ; Seccomp:	2 ; Seccomp_filters:	1 ; Cpus_allowed_list:	0-7 ; 
+proc.self.status=TracerPid:	0 ; NoNewPrivs:	1 ; Seccomp:	2 ; Seccomp_filters:	1 ; Cpus_allowed_list:	0-7 ;
 camera.ids=0,1
-camera.capture.0=jpeg 5926 640x480 px(320,240)=ff008700
-camera.capture.1=jpeg 5926 640x480 px(320,240)=ff008700
+camera.capture.0=frames=50 jpeg 7476 640x480 px(320,240)=ff0c0a0d detail=0.13
+camera.capture.1=frames=45 jpeg 11801 640x480 px(320,240)=ff777777 detail=0.88
 camera.chars.0=facing=1 level=3 pixelArray=4032x3024 physical=5.6448x4.2336 focal=[4.38] orientation=90 caps=[0, 1, 2, 5, 6, 4, 7, 3, 18, 19] maxJpeg=4032x3024 physicalIds=[]
 camera.chars.1=facing=0 level=1 pixelArray=3264x2448 physical=3.6556802x2.74176 focal=[2.51] orientation=270 caps=[0, 1, 2, 5, 6, 4, 7, 3, 18, 19] maxJpeg=3264x2448 physicalIds=[]
-display.modes=1080x2340@90.0 
+display.modes=1080x2340@60.000004 1080x2340@90.0
 tel.modems=supported=1 active=1
-net.caps.withLocation="Xiaomi_145D" 64:09:80:aa:14:5d id=0
-sensor.pressure=BMP380 Barometer | Bosch = NaN hPa
-features.hw=android.hardware.bluetooth android.hardware.camera.autofocus android.hardware.camera.flash android.hardware.camera.front android.hardware.bluetooth_le android.hardware.camera android.hardware.camera.capability.manual_post_processing android.hardware.camera.any android.hardware.camera.capability.raw android.hardware.camera.capability.manual_sensor android.hardware.camera.level.full android.sofware.nfc.beam 
+net.caps.withLocation="Xiaomi_7713" 64:09:80:60:77:13 id=0
+sensor.pressure=BMP380 Barometer | Bosch = 1011.75 hPa
+features.hw=android.hardware.bluetooth android.hardware.camera.autofocus android.hardware.camera.flash android.hardware.camera.front android.hardware.bluetooth_le android.hardware.camera android.hardware.camera.capability.manual_post_processing android.hardware.camera.any android.hardware.camera.capability.raw android.hardware.camera.capability.manual_sensor android.hardware.camera.level.full android.sofware.nfc.beam
 bt=false name=Pixel 5 addr=02:00:00:00:00:00
-battery=level=56 plugged=2 status=2 volt=3841 temp=305 tech=Li-ion
-auxv=3=6fc4f32040 9=6fc4f34000 16=119fff 
+battery=level=17 plugged=2 status=2 volt=3623 temp=318 tech=Li-ion
+auxv=3=78fbe38040 9=78fbe3a000 16=119fff
 Build.BOOTLOADER=r3-0.5-9825705
 prop.revision=MP1.0 hw=MP1.0 bootmode=unknown
 gl.egl.prop=adreno
-pkg.count=138
+time.hw=9912 ms
+pkg.count=162
 ```
 
 ## 附录 B：真机探针原始输出（2026-11-24 18:23）
