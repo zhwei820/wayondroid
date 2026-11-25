@@ -16,7 +16,7 @@
 
 struct touch_extra {
     uint8_t pressure; /* 0..255 */
-    uint8_t major;    /* contact axes, mm, 0..15 */
+    uint8_t major;    /* contact axes, the guest's touch units, 0..15 */
     uint8_t minor;
     uint8_t pad;
 };

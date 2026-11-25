@@ -170,8 +170,10 @@ bool parse_input_line(const std::string& line, std::vector<InputEvent>* out, std
             if (p.pressure >= 0) {
                 auto clamp = [](double v, int hi) { return v < 0 ? 0 : v > hi ? hi : (int)(v + 0.5); };
                 e.pressure = clamp(p.pressure * 255, 255);
-                e.major = clamp(p.major, 15);
-                e.minor = clamp(p.minor, 15);
+                /* the phone's raw contact units (a 0..255 axis): the guest's
+                 * touchscreen takes 0..15, where a finger's contact falls */
+                e.major = clamp(p.major * 255, 15);
+                e.minor = clamp(p.minor * 255, 15);
             }
             evs.push_back(e);
         };

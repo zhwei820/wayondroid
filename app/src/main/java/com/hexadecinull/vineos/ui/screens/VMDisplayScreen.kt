@@ -271,7 +271,7 @@ private fun GuestSurface(
                         currentThree()
                     } else if (!swallowed && v.width > 0 && v.height > 0) {
                         currentTouch(action, event.actionIndex,
-                            event.toPoints(v.width, v.height, v.resources.displayMetrics.xdpi))
+                            event.toPoints(v.width, v.height, withContact = true))
                     }
                     true
                 }
@@ -281,17 +281,26 @@ private fun GuestSurface(
     )
 }
 
-// With the phone's own pressure and contact size, so guest apps see a real finger's
-private fun MotionEvent.toPoints(width: Int, height: Int, xdpi: Float = 0f): List<TouchPoint> {
+// With the phone's own contact size (a fraction of its touchscreen's size axis), so guest apps see a
+// real finger's. Phones whose touchscreens report no pressure give a constant 1.0 (or 0): then the
+// pressure follows the contact size, as capacitive "pressure" mostly does, with a little noise.
+private fun MotionEvent.toPoints(width: Int, height: Int, withContact: Boolean = false): List<TouchPoint> {
     val w = width.coerceAtLeast(1).toFloat()
     val h = height.coerceAtLeast(1).toFloat()
-    val mmPerPx = if (xdpi > 0f) 25.4f / xdpi else 0f
+    val majorMax = device?.getMotionRange(MotionEvent.AXIS_TOUCH_MAJOR)?.max ?: 0f
+    val minorMax = device?.getMotionRange(MotionEvent.AXIS_TOUCH_MINOR)?.max ?: majorMax
     return List(pointerCount) { i ->
-        if (mmPerPx > 0f) {
-            TouchPoint(getPointerId(i), getX(i) / w, getY(i) / h, getPressure(i),
-                getTouchMajor(i) * mmPerPx, getTouchMinor(i) * mmPerPx)
-        } else {
+        if (!withContact || majorMax <= 0f) {
             TouchPoint(getPointerId(i), getX(i) / w, getY(i) / h)
+        } else {
+            val major = getTouchMajor(i) / majorMax
+            val minor = if (minorMax > 0f) getTouchMinor(i) / minorMax else major
+            var pressure = getPressure(i)
+            if (pressure <= 0f || pressure >= 0.999f) {
+                pressure = (0.05f + major.coerceAtLeast(minor) * 255f * 0.06f +
+                    (Math.random().toFloat() - 0.5f) * 0.06f).coerceIn(0.05f, 1f)
+            }
+            TouchPoint(getPointerId(i), getX(i) / w, getY(i) / h, pressure, major, minor)
         }
     }
 }
