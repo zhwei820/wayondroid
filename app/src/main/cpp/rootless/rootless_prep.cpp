@@ -153,7 +153,9 @@ const char kCheckDisplay[] =
     "kill -9 $pid\n";
 
 // Keeps the guest's FlClash running, proxy only (no tun in the guest):
-// started whenever nothing listens on its mixed port. FlClash's START is
+// started whenever nothing listens on its mixed port, and the guest's
+// system HTTP proxy pointed at that port (cleared again once FlClash is
+// gone, or apps would have no network). FlClash's START is
 // a transparent activity, which takes focus for a moment, so a FlClash
 // that won't start (its VPN left on) is retried every 5 minutes after 3
 // tries. Exempt from Doze, app standby and background restrictions, so
@@ -173,11 +175,15 @@ const char kProxyKeeper[] =
     "        fi\n"
     "        if echo | toybox nc -w 2 127.0.0.1 7890 >/dev/null 2>&1; then\n"
     "            fails=0\n"
+    "            [ \"$(settings get global http_proxy)\" = 127.0.0.1:7890 ] ||\n"
+    "                settings put global http_proxy 127.0.0.1:7890\n"
     "        else\n"
     "            fails=$((fails + 1))\n"
     "            log -p i -t vine \"FlClash not listening on 7890, starting it (try $fails)\"\n"
     "            am start -a $pkg.action.START -p $pkg >/dev/null 2>&1\n"
     "        fi\n"
+    "    elif [ \"$(settings get global http_proxy)\" = 127.0.0.1:7890 ]; then\n"
+    "        settings put global http_proxy :0\n"
     "    fi\n"
     "    if [ $fails -ge 3 ]; then sleep 300; else sleep 30; fi\n"
     "done\n";

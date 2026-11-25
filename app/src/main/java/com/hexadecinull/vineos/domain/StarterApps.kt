@@ -20,7 +20,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Installs the apps a new instance starts with, on its first boot that gets them all in: APKPure and Edge (the
+ * Installs the apps a new instance starts with, on its first boot that gets them all in: Wandoujia and Edge (the
  * default browser in place of Chrome, which is disabled), copied from the phone when it has them or else downloaded,
  * and FlClash, from the phone only (the guest's proxy, kept running by rootless_prep's proxy keeper).
  * A new instance carries InstanceProvisioner.STARTER_APPS_PENDING until then; a failed one is tried again next boot.
@@ -128,16 +128,9 @@ class StarterApps @Inject constructor(
     private companion object {
         const val TAG = "StarterApps"
 
-        // d.apkpure.com answers a script challenge (403) to plain clients; .net serves the APK
+        // Wandoujia's own client link on www.wandoujia.com (Alibaba's 25pp CDN)
         val STARTERS = listOf(
-            Starter(
-                "com.apkpure.aegon",
-                "APKPure",
-                listOf(
-                    "https://d.apkpure.net/b/APK/com.apkpure.aegon?version=latest",
-                    "https://d.apkpure.com/b/APK/com.apkpure.aegon?version=latest",
-                ),
-            ),
+            Starter("com.wandoujia.phoenix2", "Wandoujia", listOf("https://ucan.25pp.com/Wandoujia_wandoujia_sem_default.apk")),
             // A universal APK (every ABI), about 260 MB
             Starter(
                 "com.microsoft.emmx",
