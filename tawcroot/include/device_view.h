@@ -28,6 +28,14 @@
 #include <ucontext.h>
 #include "dispatch.h"
 
+/* With a 4.x kernel in the view's uname, the syscalls 4.19 lacks that the
+ * host's kernel has (pidfd_send_signal, pidfd_open, close_range,
+ * pidfd_getfd, faccessat2, process_madvise) fail with ENOSYS for every
+ * guest process, as on the device: callers probe them and fall back.
+ * Others newer than 4.19 tawcroot denies anyway (io_uring, clone3,
+ * openat2, the new mount API) or the host lacks. */
+void tawcroot_device_register(void);
+
 /* A memfd for a guest open of `path`, or TAWC_ENOSYS when the view
  * doesn't replace it */
 long tawcroot_device_open(const char *path, int flags);

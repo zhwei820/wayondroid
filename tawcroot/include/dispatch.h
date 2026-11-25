@@ -41,6 +41,9 @@ void tawcroot_dispatch_install(int nr, tawcroot_handler_fn fn);
  * that turns it on stacks a filter trapping it then
  * (tawcroot_install_lazy_filter). Until then the syscall runs at
  * native speed. */
+/* Replaces whatever handles `nr` (no collision check): for a view that
+ * takes a syscall away from every guest, e.g. tawcroot_device_register */
+void tawcroot_dispatch_override(int nr, tawcroot_handler_fn fn);
 void tawcroot_dispatch_install_lazy(int nr, tawcroot_handler_fn fn);
 
 /* Stock handlers for trapped-and-denied syscalls. -ENOSYS makes

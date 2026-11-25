@@ -623,3 +623,13 @@ long tawcroot_device_mounts(int out, int info)
 	(void)tawc_munmap(buf, MOUNTS_MAX);
 	return e;
 }
+
+void tawcroot_device_register(void)
+{
+	char release[16];
+	long n = read_device("uname", release, sizeof release);
+	if (n < 2 || release[0] != '4' || release[1] != '.') return;
+	static const int newer[] = { 424, 434, 436, 438, 439, 440 };
+	for (size_t i = 0; i < sizeof newer / sizeof newer[0]; i++)
+		tawcroot_dispatch_override(newer[i], tawcroot_deny_enosys);
+}

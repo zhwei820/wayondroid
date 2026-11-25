@@ -13,6 +13,7 @@
 #include "dispatch.h"
 #include "errno_neg.h"
 #include "bpf_emul.h"
+#include "device_view.h"
 #include "fdtab.h"
 #include "identity.h"
 #include "namespace.h"
@@ -73,6 +74,13 @@ void tawcroot_dispatch_install_lazy(int nr, tawcroot_handler_fn fn)
 	g_lazy[nr] = 1;
 }
 
+void tawcroot_dispatch_override(int nr, tawcroot_handler_fn fn)
+{
+	if (nr < 0 || nr >= TAWCROOT_DISPATCH_MAX) return;
+	g_dispatch[nr] = fn;
+	g_lazy[nr] = 0;
+}
+
 tawcroot_handler_fn tawcroot_dispatch_get(int nr)
 {
 	if (nr < 0 || nr >= TAWCROOT_DISPATCH_MAX) return 0;
@@ -93,6 +101,7 @@ void tawcroot_dispatch_init(void)
 	tawcroot_sysv_shm_register();
 	tawcroot_binder_register();
 	tawcroot_bpf_register();
+	tawcroot_device_register();
 }
 
 size_t tawcroot_dispatch_trap_list(int *out, size_t out_cap)
