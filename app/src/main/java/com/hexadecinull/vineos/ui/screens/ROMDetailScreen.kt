@@ -144,18 +144,19 @@ fun ROMDetailScreen(
                         Text("Create Instance")
                     }
                 }
-                uiState.progress?.state == ROMDownloadState.DOWNLOADING -> {
+                uiState.progress?.state == ROMDownloadState.DOWNLOADING || uiState.progress?.state == ROMDownloadState.VERIFYING -> {
                     val pct = uiState.progress?.progressPercent ?: 0
                     LinearProgressIndicator(
                         progress = { (uiState.progress?.progressFraction ?: 0f) },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("Downloading, $pct%", style = MaterialTheme.typography.labelSmall)
+                    val verb = if (uiState.progress?.state == ROMDownloadState.VERIFYING) "Verifying" else "Downloading"
+                    Text("$verb, $pct%", style = MaterialTheme.typography.labelSmall)
                 }
                 else -> Button(onClick = vm::download, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Download (${formatBytes(rom.sizeBytes)})")
+                    Text(if (rom.sizeBytes > 0) "Download (${formatBytes(rom.sizeBytes)})" else "Download")
                 }
             }
         }

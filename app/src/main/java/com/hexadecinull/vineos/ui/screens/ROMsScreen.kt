@@ -206,7 +206,7 @@ private fun ROMCard(
                             Icon(Icons.Filled.Delete, contentDescription = "Delete ${rom.displayName}")
                         }
                     }
-                    progress?.state == ROMDownloadState.DOWNLOADING -> {}
+                    progress?.state == ROMDownloadState.DOWNLOADING || progress?.state == ROMDownloadState.VERIFYING -> {}
                     else -> {
                         FilledTonalIconButton(onClick = onDownload) {
                             Icon(Icons.Filled.Download, contentDescription = "Download ${rom.displayName}")
@@ -215,7 +215,7 @@ private fun ROMCard(
                 }
             }
 
-            if (progress != null && progress.state == ROMDownloadState.DOWNLOADING) {
+            if (progress != null && (progress.state == ROMDownloadState.DOWNLOADING || progress.state == ROMDownloadState.VERIFYING)) {
                 Spacer(Modifier.height(10.dp))
                 Column {
                     Row(
@@ -223,7 +223,7 @@ private fun ROMCard(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            "Downloading…",
+                            if (progress.state == ROMDownloadState.VERIFYING) "Verifying…" else "Downloading…",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

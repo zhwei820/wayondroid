@@ -1531,7 +1531,7 @@ std::string props_64bit_only(const std::string& build_prop) {
     return out;
 }
 
-DeviceIdentity guest_identity() {
+DeviceIdentity guest_identity(const std::string& persona) {
     DeviceIdentity id;
     id.brand = "google";
     id.manufacturer = "Google";
@@ -1646,6 +1646,7 @@ DeviceIdentity guest_identity() {
         {"ro.system_ext.build.type", "user"},
         {"ro.system_ext.build.version.incremental", "10753682"},
     };
+    if (persona == "grapheneos") id.verified_boot_state = "yellow";
     return id;
 }
 
@@ -1734,10 +1735,18 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
     return out;
 }
 
-DeviceIdentity rootfs_identity(const std::string& rootfs) {
+DeviceIdentity rootfs_identity(const std::string& rootfs, const std::string& instance) {
     const auto system_prop = read_file(rootfs + "/system/build.prop");
     if (!system_prop || system_prop->find("\nro.build.version.release=13\n") == std::string::npos) return {};
-    return guest_identity();
+    // "identity": "<persona>" in the manifest the app wrote
+    std::string persona;
+    if (const auto manifest = instance.empty() ? std::nullopt : read_file(instance + "/manifest.json")) {
+        const size_t key = manifest->find("\"identity\"");
+        const size_t open = key == std::string::npos ? key : manifest->find('"', manifest->find(':', key));
+        const size_t close = open == std::string::npos ? open : manifest->find('"', open + 1);
+        if (close != std::string::npos) persona = manifest->substr(open + 1, close - open - 1);
+    }
+    return guest_identity(persona);
 }
 
 std::string guest_cmdline(const DeviceIdentity& id, const std::string& serial) {
@@ -1747,9 +1756,7 @@ std::string guest_cmdline(const DeviceIdentity& id, const std::string& serial) {
     if (!id.baseband.empty()) out += "androidboot.baseband=" + id.baseband + " ";
     if (!id.revision.empty()) out += "androidboot.revision=" + id.revision + " androidboot.hardware.revision=" + id.revision + " ";
     if (!serial.empty()) out += "androidboot.serialno=" + serial + " ";
-    // yellow: a relocked bootloader booting an OS signed with its own key
-    // (GrapheneOS's), not Google's
-    return out + "androidboot.verifiedbootstate=yellow androidboot.flash.locked=1 "
+    return out + "androidboot.verifiedbootstate=" + id.verified_boot_state + " androidboot.flash.locked=1 "
                  "androidboot.vbmeta.device_state=locked androidboot.veritymode=enforcing\n";
 }
 
@@ -1881,7 +1888,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // A Pixel 5's identity instead of Waydroid's (apps reading Build.* or
     // the fingerprint see its Android 13 release build), for an Android 13
     // image only: on another release the identity would contradict it
-    const DeviceIdentity id = rootfs_identity(R);
+    const DeviceIdentity id = rootfs_identity(R, l.instance);
     if (!id.empty()) {
         std::vector<std::pair<std::string, std::string>> files;
         for (const char* f : {"/system/build.prop", "/system/system_ext/etc/build.prop", "/system/product/etc/build.prop",

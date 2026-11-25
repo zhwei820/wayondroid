@@ -13,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -45,7 +47,8 @@ class InstanceProvisioner @Inject constructor(@ApplicationContext private val co
 
     fun freeBytes(): Long = runCatching { StatFs(instancesDir.path).availableBytes }.getOrDefault(0L)
 
-    suspend fun create(vrom: File, instanceId: String, onProgress: (ProvisionProgress) -> Unit): Result<File> =
+    // identity: the device the guest presents (ROMImage.identity), written into the instance's manifest.json
+    suspend fun create(vrom: File, instanceId: String, identity: String = "", onProgress: (ProvisionProgress) -> Unit): Result<File> =
         withContext(Dispatchers.IO) {
             val dir = instanceDir(instanceId)
             try {
@@ -64,7 +67,7 @@ class InstanceProvisioner @Inject constructor(@ApplicationContext private val co
                     if (dir.exists()) throw IOException("The instance folder already exists")
                     if (!dir.mkdirs()) throw IOException("Could not create the instance folder")
 
-                    File(dir, MANIFEST).writeText(manifestText)
+                    File(dir, MANIFEST).writeText(withIdentity(manifestText, identity))
                     var done = 0L
                     var lastReport = 0L
                     for ((name, entry) in wanted) {
@@ -103,6 +106,12 @@ class InstanceProvisioner @Inject constructor(@ApplicationContext private val co
                 Result.failure(e)
             }
         }
+
+    private fun withIdentity(manifestText: String, identity: String): String {
+        if (identity.isEmpty()) return manifestText
+        val root = Json.parseToJsonElement(manifestText).jsonObject
+        return JsonObject(root + ("identity" to JsonPrimitive(identity))).toString() + "\n"
+    }
 
     fun readManifest(instanceDir: File): VromManifest {
         val f = File(instanceDir, MANIFEST)

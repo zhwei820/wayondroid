@@ -52,7 +52,9 @@ class ROMsViewModel @Inject constructor(private val romRepo: ROMRepository) : Vi
 
     fun download(rom: ROMImage) {
         viewModelScope.launch {
-            romRepo.download(rom, onProgress = {})
+            romRepo.download(rom, onProgress = {}).onFailure { e ->
+                _importError.value = "Could not download ${rom.displayName}: ${e.message}"
+            }
         }
     }
 
