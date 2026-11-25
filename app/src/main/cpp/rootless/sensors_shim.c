@@ -358,10 +358,10 @@ EXPORT void SEND_INFO_REPORT(void* self, int handle)
     e = last[handle];
     pthread_mutex_unlock(&last_lock);
     if (!have) {
-        if (handle != kHinge0) return;
+        if (handle != kHinge0 && handle != wake_twin(kHinge0)) return;
         /* no step since the guest booted */
         memset(&e, 0, sizeof e);
-        e.handle = kHinge0;
+        e.handle = handle;
         e.type = kTypeStepCounter;
     }
     struct timespec now;
