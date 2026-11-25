@@ -2,6 +2,7 @@
 
 2026-11-25 第四次实测（10:05），子系统对应 `93000b2`（当前 HEAD）；
 真机列沿用 2026-11-24 第二次实测（18:23），本轮未重跑。
+标「`1825cc6` 复测」的行取自 2026-11-25 13:40 对 `1825cc6` 的复测，附录原始报告仍是第四次的。
 两侧运行同一份探针 `dev.probe.env`（普通第三方应用视角，非 shell/root）：
 子系统用 `scripts/probe/run.sh`，真机用同一份源码以可调试构建安装后运行。
 
@@ -26,14 +27,11 @@
 2. **仍存差异（与权限无关，可直接比较）**：
    - `/proc/self/mounts` 104 行（真机 218）；`/dev/socket` 无 `zygote_secondary`
    - 相机只测了 640×480；全尺寸 4032×3024 / 3264×2448 与 RAW 未实测，第三颗超广角未暴露
-   - 图形扩展集 124 vs 真机 104，缺 `GL_OES_tessellation_shader` / `GL_OES_gpu_shader5`
    - 网络接口只有 `dummy0 wlan0 ifb0 lo ifb1`（`rmnet_*` 有意不列）
    - 162 个包、无 GMS / Play（用户未要求补齐）
-   - `supportedModemCount=1`（Pixel 5 有 eSIM，预期 2，未核对）
 3. **探针覆盖不到、且不做修复的底层差异**：CPU ID 寄存器与指令集、真实内核 5.10 的
    系统调用集、性能与时序、GPU 驱动行为、硬件密钥认证等，见「附：硬不可修复层」。
-4. **待核对值**：`Build.HOST`、传感器器件型号、`MemTotal`、`ro.build.date`、
-   `phoneCount` / `supportedModemCount`、超广角相机组成。
+4. **待核对值**：传感器器件型号、`MemTotal`、超广角相机组成。
 
 ## 本轮已修复（第四次实测，相对第三次）
 
@@ -60,7 +58,7 @@ LineageOS 包隐藏，本次保持。
 | Build.FINGERPRINT | `google/redfin/redfin:13/TQ3A.230901.001.C2/10753682:user/release-keys` | OnePlus/PHK110/OP5913L1:16/… | 同左 | ✅ |
 | Build.DISPLAY | TQ3A.230901.001.C2 | PHK110_16.0.5.1201(CN01) | 同左 | ✅ |
 | Build.TAGS / TYPE / USER | release-keys / user / android-build | release-keys / user / root | 同左 | ✅ |
-| Build.HOST | abfarm-release-rbe-64-2004-0087 | kvm-slave-build-s-system-13034639 | ★ 未核对 | ⚠️ |
+| Build.HOST | abfarm-release-rbe-64-2004-0087 | kvm-slave-build-s-system-13034639 | ★ 同左（.C2 工厂包 build.prop，`ro.build.date` 也一致） | ✅ |
 | Build.SOC | QTI SM7250 | QTI SM8475 | QTI SM7250 | ✅ |
 | Build.radio / gsm.version.baseband | `g7250-00258-230518-B-10157620` | Q_V1_P14（双卡） | ★ 同左（.C2 工厂包） | ✅ |
 | ro.bootloader / Build.BOOTLOADER | `r3-0.5-9825705` | unknown | ★ 同左（.C2 工厂包） | ✅ |
@@ -141,17 +139,18 @@ Orientation）也在。
 |---|---|---|---|---|
 | gl.vendor / renderer | Qualcomm / Adreno (TM) 620 | Qualcomm / Adreno (TM) 730 | Qualcomm / Adreno 620 | ✅ |
 | gl.version | `OpenGL ES 3.2 V@0490.0 (GIT@4783c89, …) (Date:11/30/20)` | `OpenGL ES 3.2 V@0615.100 …` | ★ ES 3.2 | ✅ |
-| gl.extensions | 124，无 ANGLE/CHROMIUM 扩展 | 104 | 未核对 | ⚠️ |
-| ES 3.2 相关扩展 | 缺 `GL_OES_tessellation_shader`、`GL_OES_gpu_shader5`，其余 8 个有 | 未测 | 未核对 | ⚠️ |
+| gl.extensions | 70（`1825cc6` 复测），全部在 Pixel 5 扩展表内 | 104 | ★ gpuinfo 报告 6126 | ✅ 子集；Pixel 5 有而 ANGLE 没有的扩展不报 |
+| ES 3.2 相关扩展 | 只有 EXT 名（geometry / tessellation / gpu_shader5），OES 名为 0 | 未测 | ★ Pixel 5 扩展表同样只有 EXT 名 | ✅ |
 | 3.2 上下文 | 创建成功 | — | 成功 | ✅ |
 
 字符串层面已对齐；渲染仍由 ANGLE-on-Vulkan 完成，渲染时序、shader 编译行为与
 原生 Adreno 驱动不同，属字符串伪装改不到的层面。
 
-扩展集仍有差异：子系统 124 个（ANGLE 的集合经过滤），真机 104 个；缺
-`GL_OES_tessellation_shader`、`GL_OES_gpu_shader5`（只有 EXT 别名）。另有一个
-非标准属性 `ro.egl.hal.impl=angle`（libEGL 改名后靠它加载 ANGLE）；探针未查该键，
-应用若直接读 `SystemProperties` 可能看到 angle，待确认。
+应用看到的扩展只取 ANGLE 与 Pixel 5 扩展表（`gles_shim.c` 的 `kPixel5Extensions`）的交集。
+不要补 `GL_OES_tessellation_shader` / `GL_OES_gpu_shader5`：Pixel 5 本身就没有报这两个，
+而且 ANGLE 的着色器编译器不认这两个 `#extension`。
+libEGL 加载 ANGLE 靠的属性现名 `debug.egl.drv=angle`（仿 Pixel 自带的 `debug.egl.hw`）；
+应用仍能读到它，因为应用进程内的 libEGL 也要读。
 
 ## 7. 文件系统、/proc 与权限面
 
@@ -196,7 +195,7 @@ Chrome / TrichromeLibrary 的 APK 内有 `lib/arm64-v8a/libmonochrome_64.so`（�
 | tel.phoneType / voice / sms | 1 / true / true | 同左 | 同左 | ✅ |
 | networkOperator 等 | 空 | 46001 / 中国联通 / cn | 空 | ✅ |
 | serviceState | null | SecurityException（无权限） | AOSP 13 无 SIM 时为 null | ✅ 非差异（已核对 AOSP 源码） |
-| phoneCount / modems | 1 / supported=1 active=1 | 2 | 实体卡 + eSIM，supported 预期 2 | ⚠️ 待核对 |
+| phoneCount / modems | 1 / supported=2 active=1（`1825cc6` 复测） | 2 | ★ vendor build.prop `telephony.active_modems.max_count=2`，未设 multisim 配置，默认单卡激活 | ✅ |
 | gsm.version.ril-impl | Qualcomm RIL 1.0 | 同左 | 同左 | ✅ |
 | bt | 关闭，name=Pixel 5，addr 02:00…（应用无 LOCAL_MAC 权限时的正常值） | — | 同左 | ⚠️ 开启后的行为未测 |
 
