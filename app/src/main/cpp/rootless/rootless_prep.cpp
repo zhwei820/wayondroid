@@ -1747,7 +1747,9 @@ std::string guest_cmdline(const DeviceIdentity& id, const std::string& serial) {
     if (!id.baseband.empty()) out += "androidboot.baseband=" + id.baseband + " ";
     if (!id.revision.empty()) out += "androidboot.revision=" + id.revision + " androidboot.hardware.revision=" + id.revision + " ";
     if (!serial.empty()) out += "androidboot.serialno=" + serial + " ";
-    return out + "androidboot.verifiedbootstate=green androidboot.flash.locked=1 "
+    // yellow: a relocked bootloader booting an OS signed with its own key
+    // (GrapheneOS's), not Google's
+    return out + "androidboot.verifiedbootstate=yellow androidboot.flash.locked=1 "
                  "androidboot.vbmeta.device_state=locked androidboot.veritymode=enforcing\n";
 }
 
