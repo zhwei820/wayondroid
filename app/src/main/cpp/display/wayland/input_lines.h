@@ -8,6 +8,9 @@
 // Wayland seat events for vine_wl:
 //
 //   touch ACTION INDEX COUNT (ID X Y)*   X, Y: fractions of the screen
+//   touchx ACTION INDEX COUNT (ID X Y P MAJ MIN)*
+//                                        P: pressure 0..1, MAJ/MIN: the
+//                                        contact's axes in millimetres
 //   key KEYCODE 1|0                      Android keycode, down or up
 //   text STRING                          escaped like HelperProtocol
 namespace vine::wl {
@@ -17,6 +20,8 @@ struct InputEvent {
     Kind kind;
     int32_t id = 0;               // touch point
     double x = 0, y = 0;          // touch position, fractions
+    int pressure = -1;            // 0..255, -1: none known (touch lines)
+    int major = 0, minor = 0;     // contact axes, mm, 0..15
     uint32_t key = 0;             // evdev code
     bool down = false;
 };

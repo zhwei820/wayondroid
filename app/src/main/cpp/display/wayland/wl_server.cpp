@@ -755,7 +755,14 @@ void Client::deliver(const InputEvent& e) {
     if (!surface) return;
     FrameSink* sink = server_->sink();
     auto fixed = [](double v) { return (int32_t)(v * 256.0); };
-    const int32_t x = fixed(e.x * sink->width()), y = fixed(e.y * sink->height());
+    int32_t x = fixed(e.x * sink->width()), y = fixed(e.y * sink->height());
+    // Waydroid's hwcomposer truncates positions to whole pixels and has no
+    // pressure or (on its wl_seat v5) touch shape: the fraction bits carry
+    // them to hwc_shim.c, which puts them in the evdev events it writes
+    if (e.pressure >= 0) {
+        x = (int32_t)(e.x * sink->width()) * 256 | (e.pressure & 0xff);
+        y = (int32_t)(e.y * sink->height()) * 256 | ((e.major & 0xf) << 4) | (e.minor & 0xf);
+    }
     const uint32_t t = now_ms();
     for (const auto& [oid, obj] : objects_) {
         auto* d = dynamic_cast<InputDevice*>(obj.get());

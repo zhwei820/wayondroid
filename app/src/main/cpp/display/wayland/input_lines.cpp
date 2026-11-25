@@ -145,17 +145,20 @@ bool parse_input_line(const std::string& line, std::vector<InputEvent>* out, std
     std::istringstream in(line);
     std::string verb;
     in >> verb;
-    if (verb == "touch") {
+    if (verb == "touch" || verb == "touchx") {
+        const bool extended = verb == "touchx";
         int action = -1, index = -1, count = -1;
         in >> action >> index >> count;
         if (!in || count < 1 || count > 10 || index < 0 || index >= count) return fail(error, "bad touch line");
         struct Point {
             int32_t id;
             double x, y;
+            double pressure = -1, major = 0, minor = 0;
         };
         std::vector<Point> pts((size_t)count);
         for (Point& p : pts) {
             in >> p.id >> p.x >> p.y;
+            if (extended) in >> p.pressure >> p.major >> p.minor;
             if (!in) return fail(error, "bad touch point");
         }
         std::vector<InputEvent> evs;
@@ -164,6 +167,12 @@ bool parse_input_line(const std::string& line, std::vector<InputEvent>* out, std
             e.id = p.id;
             e.x = p.x;
             e.y = p.y;
+            if (p.pressure >= 0) {
+                auto clamp = [](double v, int hi) { return v < 0 ? 0 : v > hi ? hi : (int)(v + 0.5); };
+                e.pressure = clamp(p.pressure * 255, 255);
+                e.major = clamp(p.major, 15);
+                e.minor = clamp(p.minor, 15);
+            }
             evs.push_back(e);
         };
         switch (action) {

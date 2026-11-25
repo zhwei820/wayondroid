@@ -270,7 +270,8 @@ private fun GuestSurface(
                         currentTouch(GuestProtocol.ACTION_CANCEL, 0, event.toPoints(v.width, v.height))
                         currentThree()
                     } else if (!swallowed && v.width > 0 && v.height > 0) {
-                        currentTouch(action, event.actionIndex, event.toPoints(v.width, v.height))
+                        currentTouch(action, event.actionIndex,
+                            event.toPoints(v.width, v.height, v.resources.displayMetrics.xdpi))
                     }
                     true
                 }
@@ -280,10 +281,19 @@ private fun GuestSurface(
     )
 }
 
-private fun MotionEvent.toPoints(width: Int, height: Int): List<TouchPoint> {
+// With the phone's own pressure and contact size, so guest apps see a real finger's
+private fun MotionEvent.toPoints(width: Int, height: Int, xdpi: Float = 0f): List<TouchPoint> {
     val w = width.coerceAtLeast(1).toFloat()
     val h = height.coerceAtLeast(1).toFloat()
-    return List(pointerCount) { i -> TouchPoint(getPointerId(i), getX(i) / w, getY(i) / h) }
+    val mmPerPx = if (xdpi > 0f) 25.4f / xdpi else 0f
+    return List(pointerCount) { i ->
+        if (mmPerPx > 0f) {
+            TouchPoint(getPointerId(i), getX(i) / w, getY(i) / h, getPressure(i),
+                getTouchMajor(i) * mmPerPx, getTouchMinor(i) * mmPerPx)
+        } else {
+            TouchPoint(getPointerId(i), getX(i) / w, getY(i) / h)
+        }
+    }
 }
 
 @Composable
