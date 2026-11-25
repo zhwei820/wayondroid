@@ -6,27 +6,28 @@
  * its vsync events go out on a 60 Hz grid, each when the first 90 Hz vsync
  * at or after its time arrives.
  *
- * Touches: the hwcomposer writes evdev events for each touch into its
- * input pipe with a fixed ABS_MT_PRESSURE of 50 and no contact size (its
- * wl_seat is v5, before wl_touch.shape). vine_wl puts the phone's pressure
- * and contact axes in the position's fraction bits, which the hwcomposer
- * drops: x's low byte the pressure (0..255), y's the major and minor axes
- * in mm (4 bits each). Its wl_touch listener is wrapped to read them, and
- * its writes to the touch pipe carry them as ABS_MT_PRESSURE and
- * ABS_MT_TOUCH_MAJOR/MINOR.
+ * Touches: the hwcomposer's evdev batches for a touch-down or touch-move
+ * (ABS_MT_PRESSURE 50, no contact size) get the phone's pressure and
+ * contact axes from vine_wl's ring (touch_extras.h), one record per batch
+ * in order. Only write(2) is wrapped, and only such batches are changed.
  *
  * Layouts from hardware/libhardware hardware.h and hwcomposer.h
  * (android13-release), LP64. */
 #define _GNU_SOURCE
+#include <android/log.h>
 #include <dlfcn.h>
 #include <errno.h>
-#include <link.h>
 #include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include "../display/wayland/touch_extras.h"
 #include <pthread.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/types.h>
 
 #define EXPORT __attribute__((visibility("default")))
 
@@ -220,146 +221,86 @@ EXPORT int hw_get_module_by_class(const char* class_id, const char* inst, const 
 
 /* ---- touches ---- */
 
-struct wl_proxy;
-typedef int32_t wl_fixed_t;
-struct timeval64 { int64_t sec, usec; };
 struct input_event64 {
-    struct timeval64 time;
+    int64_t sec, usec;
     uint16_t type, code;
     int32_t value;
 };
 _Static_assert(sizeof(struct input_event64) == 24, "LP64 input_event");
-enum { kEvSyn = 0, kEvAbs = 3, kAbsMtTouchMajor = 0x30, kAbsMtTouchMinor = 0x31, kAbsMtPressure = 0x3a };
-static const char kTouchPipe[] = "wl_touch_events";
+enum { kEvSyn = 0, kEvAbs = 3, kAbsMtTouchMajor = 0x30, kAbsMtTouchMinor = 0x31, kAbsMtPositionX = 0x35,
+       kAbsMtPressure = 0x3a, kHwcPressure = 50 };
 
-/* wl_touch_listener: down, up, motion, frame, cancel, shape, orientation */
-typedef void (*touch_down_fn)(void*, void*, uint32_t, uint32_t, void*, int32_t, wl_fixed_t, wl_fixed_t);
-typedef void (*touch_motion_fn)(void*, void*, uint32_t, int32_t, wl_fixed_t, wl_fixed_t);
-static void* touch_listener[7];
-static touch_down_fn real_touch_down;
-static touch_motion_fn real_touch_motion;
-static int touch_fd = -1;
-/* The touch being reported, set around the hwcomposer's handler (it
- * writes the events from within it) */
-static __thread int pending_pressure = -1, pending_major, pending_minor;
+static const struct touch_extras* extras;
+static uint32_t extras_read;
 
-static void take_extras(wl_fixed_t x, wl_fixed_t y)
+static const struct touch_extras* map_extras(void)
 {
-    pending_pressure = x & 0xff;
-    pending_major = (y >> 4) & 0xf;
-    pending_minor = y & 0xf;
+    static int tried;
+    if (extras || tried) return extras;
+    tried = 1;
+    const char* dir = getenv("XDG_RUNTIME_DIR");
+    char path[256];
+    if (!dir || (size_t)snprintf(path, sizeof path, "%s/" TOUCH_EXTRAS_FILE, dir) >= sizeof path) return NULL;
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return NULL;
+    void* p = mmap(NULL, sizeof(struct touch_extras), PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (p == MAP_FAILED) return NULL;
+    extras = p;
+    extras_read = __atomic_load_n(&extras->written, __ATOMIC_ACQUIRE);
+    __android_log_print(ANDROID_LOG_INFO, "hwc_shim", "touch extras from %s", path);
+    return extras;
 }
 
-static void touch_down(void* data, void* touch, uint32_t serial, uint32_t time, void* surface, int32_t id,
-                       wl_fixed_t x, wl_fixed_t y)
+/* A touch-down or touch-move batch: positions and the fixed pressure */
+static int touch_batch(const struct input_event64* e, size_t n)
 {
-    take_extras(x, y);
-    real_touch_down(data, touch, serial, time, surface, id, x, y);
-    pending_pressure = -1;
-}
-
-static void touch_motion(void* data, void* touch, uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y)
-{
-    take_extras(x, y);
-    real_touch_motion(data, touch, time, id, x, y);
-    pending_pressure = -1;
-}
-
-static int find_wayland(struct dl_phdr_info* info, size_t size, void* out)
-{
-    (void)size;
-    if (info->dlpi_name && strstr(info->dlpi_name, "libwayland-client")) {
-        *(const char**)out = info->dlpi_name;
-        return 1;
+    int position = 0, pressure = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (e[i].type != kEvAbs) continue;
+        if (e[i].code == kAbsMtPositionX) position = 1;
+        if (e[i].code == kAbsMtPressure && e[i].value == kHwcPressure) pressure = 1;
     }
-    return 0;
-}
-
-EXPORT int wl_proxy_add_listener(struct wl_proxy* proxy, void (**implementation)(void), void* data)
-{
-    static int (*fn)(struct wl_proxy*, void (**)(void), void*);
-    static const char* (*get_class)(struct wl_proxy*);
-    if (!fn) {
-        /* libwayland-client comes with the hwcomposer, dlopen()ed after
-         * this preload and out of RTLD_NEXT's reach */
-        const char* path = NULL;
-        dl_iterate_phdr(find_wayland, &path);
-        void* h = path ? dlopen(path, RTLD_NOW | RTLD_NOLOAD) : NULL;
-        if (h) {
-            fn = (int (*)(struct wl_proxy*, void (**)(void), void*))dlsym(h, "wl_proxy_add_listener");
-            get_class = (const char* (*)(struct wl_proxy*))dlsym(h, "wl_proxy_get_class");
-        }
-        if (fn == wl_proxy_add_listener) fn = NULL;
-    }
-    if (!fn) return -1;
-    const char* cls = get_class ? get_class(proxy) : NULL;
-    if (cls && !strcmp(cls, "wl_touch") && implementation && implementation[0] && implementation[2] && !real_touch_down) {
-        memcpy(touch_listener, implementation, sizeof touch_listener);
-        real_touch_down = (touch_down_fn)implementation[0];
-        real_touch_motion = (touch_motion_fn)implementation[2];
-        touch_listener[0] = (void*)touch_down;
-        touch_listener[2] = (void*)touch_motion;
-        return fn(proxy, (void (**)(void))touch_listener, data);
-    }
-    return fn(proxy, implementation, data);
-}
-
-static int note_open(const char* path, int fd)
-{
-    if (fd >= 0 && path) {
-        const size_t n = strlen(path);
-        if (n >= sizeof kTouchPipe - 1 && !strcmp(path + n - (sizeof kTouchPipe - 1), kTouchPipe)) touch_fd = fd;
-    }
-    return fd;
-}
-
-EXPORT int open(const char* path, int flags, ...)
-{
-    static int (*fn)(const char*, int, ...);
-    if (!fn) fn = (int (*)(const char*, int, ...))dlsym(RTLD_NEXT, "open");
-    int mode = 0;
-    if (flags & (O_CREAT | O_TMPFILE)) {
-        va_list ap;
-        va_start(ap, flags);
-        mode = va_arg(ap, int);
-        va_end(ap);
-    }
-    return note_open(path, fn(path, flags, mode));
-}
-
-EXPORT int __open_2(const char* path, int flags)
-{
-    static int (*fn)(const char*, int);
-    if (!fn) fn = (int (*)(const char*, int))dlsym(RTLD_NEXT, "__open_2");
-    return note_open(path, fn(path, flags));
+    return position && pressure;
 }
 
 EXPORT ssize_t write(int fd, const void* buf, size_t count)
 {
     static ssize_t (*fn)(int, const void*, size_t);
     if (!fn) fn = (ssize_t (*)(int, const void*, size_t))dlsym(RTLD_NEXT, "write");
-    if (fd != touch_fd || pending_pressure < 0 || !buf || count % sizeof(struct input_event64) ||
-        count / sizeof(struct input_event64) > 12)
+    if (!fn) {
+        errno = ENOSYS;
+        return -1;
+    }
+    const size_t n = count / sizeof(struct input_event64);
+    if (!buf || !count || count % sizeof(struct input_event64) || n > 12 ||
+        !touch_batch((const struct input_event64*)buf, n) || !map_extras() ||
+        __atomic_load_n(&extras->magic, __ATOMIC_ACQUIRE) != TOUCH_EXTRAS_MAGIC)
         return fn(fd, buf, count);
+    const uint32_t written = __atomic_load_n(&extras->written, __ATOMIC_ACQUIRE);
+    /* behind by more than the ring holds (or vine_wl restarted): from the newest */
+    if (written - extras_read > TOUCH_EXTRAS_SLOTS) extras_read = written - 1;
+    if (extras_read == written) return fn(fd, buf, count);
+    const struct touch_extra r = extras->slot[extras_read % TOUCH_EXTRAS_SLOTS];
+    extras_read++;
     const struct input_event64* in = buf;
-    const size_t n = count / sizeof *in;
     struct input_event64 out[16];
     size_t k = 0;
     for (size_t i = 0; i < n; i++) {
         struct input_event64 e = in[i];
-        if (e.type == kEvAbs && e.code == kAbsMtPressure) e.value = pending_pressure;
+        if (e.type == kEvAbs && e.code == kAbsMtPressure) e.value = r.pressure;
         if (e.type == kEvSyn && e.code == 0) {
             out[k] = e;
             out[k].type = kEvAbs;
             out[k].code = kAbsMtTouchMajor;
-            out[k++].value = pending_major > pending_minor ? pending_major : pending_minor;
+            out[k++].value = r.major;
             out[k] = e;
             out[k].type = kEvAbs;
             out[k].code = kAbsMtTouchMinor;
-            out[k++].value = pending_major > pending_minor ? pending_minor : pending_major;
+            out[k++].value = r.minor;
         }
         out[k++] = e;
     }
-    const ssize_t r = fn(fd, out, k * sizeof *out);
-    return r == (ssize_t)(k * sizeof *out) ? (ssize_t)count : r;
+    const ssize_t w = fn(fd, out, k * sizeof *out);
+    return w == (ssize_t)(k * sizeof *out) ? (ssize_t)count : w;
 }

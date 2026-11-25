@@ -166,7 +166,7 @@ target_link_options(vine_sensors_shim PRIVATE -Wl,-z,max-page-size=16384)
 # Preloaded into the guest's composer service: a Pixel 5's 60 and 90 Hz display modes
 add_library(vine_hwc_shim SHARED rootless/hwc_shim.c)
 target_compile_options(vine_hwc_shim PRIVATE -fvisibility=hidden)
-target_link_libraries(vine_hwc_shim PRIVATE dl)
+target_link_libraries(vine_hwc_shim PRIVATE dl log)
 target_link_options(vine_hwc_shim PRIVATE -Wl,-z,max-page-size=16384)
 
 # Preloaded into the guest's camera HAL service: its test scene becomes vine_camera's frames

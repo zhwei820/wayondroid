@@ -1,5 +1,7 @@
 #pragma once
 
+#include "touch_extras.h"
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -90,6 +92,10 @@ private:
     bool read_input(InputConn& c);
     Client* focus() const;
     void log(const std::string& msg) const { if (log_) log_(msg); }
+    // touch_extras.h's ring, next to the Wayland socket
+    void open_touch_extras(const std::string& socket_path);
+    void publish_touch_extra(const InputEvent& e);
+    touch_extras* touch_extras_ = nullptr;
 
     FrameSink* sink_;
     Log log_;

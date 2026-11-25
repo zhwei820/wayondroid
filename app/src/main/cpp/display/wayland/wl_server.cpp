@@ -755,14 +755,9 @@ void Client::deliver(const InputEvent& e) {
     if (!surface) return;
     FrameSink* sink = server_->sink();
     auto fixed = [](double v) { return (int32_t)(v * 256.0); };
-    int32_t x = fixed(e.x * sink->width()), y = fixed(e.y * sink->height());
-    // Waydroid's hwcomposer truncates positions to whole pixels and has no
-    // pressure or (on its wl_seat v5) touch shape: the fraction bits carry
-    // them to hwc_shim.c, which puts them in the evdev events it writes
-    if (e.pressure >= 0) {
-        x = (int32_t)(e.x * sink->width()) * 256 | (e.pressure & 0xff);
-        y = (int32_t)(e.y * sink->height()) * 256 | ((e.major & 0xf) << 4) | (e.minor & 0xf);
-    }
+    const int32_t x = fixed(e.x * sink->width()), y = fixed(e.y * sink->height());
+    if ((e.kind == InputEvent::TouchDown || e.kind == InputEvent::TouchMotion) && e.pressure >= 0)
+        server_->publish_touch_extra(e);
     const uint32_t t = now_ms();
     for (const auto& [oid, obj] : objects_) {
         auto* d = dynamic_cast<InputDevice*>(obj.get());
@@ -895,7 +890,34 @@ Server::~Server() {
         if (f >= 0) close(f);
 }
 
+void Server::open_touch_extras(const std::string& socket_path) {
+    const size_t slash = socket_path.rfind('/');
+    const std::string path = (slash == std::string::npos ? std::string() : socket_path.substr(0, slash + 1)) + TOUCH_EXTRAS_FILE;
+    const int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) return;
+    if (ftruncate(fd, sizeof(touch_extras)) == 0) {
+        void* p = mmap(nullptr, sizeof(touch_extras), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (p != MAP_FAILED) {
+            touch_extras_ = static_cast<touch_extras*>(p);
+            memset(touch_extras_, 0, sizeof *touch_extras_);
+            __atomic_store_n(&touch_extras_->magic, TOUCH_EXTRAS_MAGIC, __ATOMIC_RELEASE);
+        }
+    }
+    close(fd);
+}
+
+void Server::publish_touch_extra(const InputEvent& e) {
+    if (!touch_extras_) return;
+    const uint32_t n = touch_extras_->written;
+    touch_extra& r = touch_extras_->slot[n % TOUCH_EXTRAS_SLOTS];
+    r.pressure = (uint8_t)e.pressure;
+    r.major = (uint8_t)(e.major > e.minor ? e.major : e.minor);
+    r.minor = (uint8_t)(e.major > e.minor ? e.minor : e.major);
+    __atomic_store_n(&touch_extras_->written, n + 1, __ATOMIC_RELEASE);
+}
+
 bool Server::listen(const std::string& path, std::string* error) {
+    open_touch_extras(path);
     sockaddr_un sa{};
     sa.sun_family = AF_UNIX;
     if (path.size() >= sizeof sa.sun_path) {
