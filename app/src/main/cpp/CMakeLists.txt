@@ -54,6 +54,7 @@ add_library(vine_core STATIC
     display/vinefb_reader.cpp
     display/wayland/input_lines.cpp
     helper/agent_link.cpp
+    helper/clip_link.cpp
     helper/helper_server.cpp
     helper/line_server.cpp
     helper/rootless_server.cpp
@@ -150,6 +151,13 @@ target_compile_options(vine_gles_shim PRIVATE -fvisibility=hidden)
 target_link_libraries(vine_gles_shim PRIVATE dl)
 target_link_options(vine_gles_shim PRIVATE -Wl,-z,max-page-size=16384 -Wl,-soname,libGLESv2_angle.so)
 set_target_properties(vine_gles_shim PROPERTIES NO_SONAME TRUE)
+
+# The guest's EGL driver in front of ANGLE's (rootless/egl_shim.c), as libEGL_angle.so
+add_library(vine_egl_shim SHARED rootless/egl_shim.c)
+target_compile_options(vine_egl_shim PRIVATE -fvisibility=hidden)
+target_link_libraries(vine_egl_shim PRIVATE dl)
+target_link_options(vine_egl_shim PRIVATE -Wl,-z,max-page-size=16384 -Wl,-soname,libEGL_angle.so)
+set_target_properties(vine_egl_shim PROPERTIES NO_SONAME TRUE)
 
 # Preloaded into the guest's vold: emulated storage without FUSE
 add_library(vine_vold_shim SHARED rootless/vold_fuse_shim.c)

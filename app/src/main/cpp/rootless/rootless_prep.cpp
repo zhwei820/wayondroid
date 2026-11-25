@@ -192,7 +192,7 @@ std::string device_settings_sh(const std::string& bt_mac) {
            "cmd settings put global hide_error_dialogs 1\n";
 }
 
-std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
+std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb, bool clip_bridge) {
     std::string rc =
         // lmkd needs PSI or memcg, both closed to apps: vine_lmkd kills
         // by system_server's priorities, within the instance's RAM
@@ -271,6 +271,25 @@ std::string rootless_rc(bool own_audio_hal, bool gpu, int ram_mb) {
         "    seclabel u:r:su:s0\n"
         "    disabled\n"
         "    oneshot\n";
+    if (clip_bridge) {
+        // The guest's clipboard for the engine (ClipBridge.java), on
+        // /run/user/1000/clip/sock: inside init's session, where
+        // app_process links, and as shell, which owns the package it reads
+        // the clipboard as
+        rc += "\n"
+              "on post-fs-data\n"
+              "    mkdir /run/user/1000/clip 0700 shell shell\n"
+              "\n"
+              "on property:sys.boot_completed=1\n"
+              "    start vine_clip\n"
+              "\n"
+              "service vine_clip /system/bin/app_process64 -Djava.class.path=/system/framework/vine-clip.jar /system/bin "
+              "dev.vine.clip.ClipBridge /run/user/1000/clip/sock\n"
+              "    user shell\n"
+              "    group shell\n"
+              "    seclabel u:r:shell:s0\n"
+              "    disabled\n";
+    }
     if (own_audio_hal) {
         // The image's audio HAL service is 32-bit only; its 64-bit
         // implementations are served by our passthrough service
@@ -843,6 +862,8 @@ bool patch_health_hal(const std::string& R, std::string* error) {
 // DT_NEEDED and the name it dlopen()s are rewritten to it (shorter, in
 // place). ro.hardware.egl stays angle: ANGLE's EGL library loaded under
 // another name finds no GLES library and every GL process crashes.
+// egl_shim.c takes the EGL library's name in turn (it hides multisampled
+// window configs from apps); ANGLE's moves to eglSubDriverAndroid.so.
 const char* const kAngleHidden[] = {"/vendor/lib64/egl/libEGL_mesa.so", "/vendor/lib64/egl/libGLESv1_CM_mesa.so",
                                     "/vendor/lib64/egl/libGLESv2_mesa.so"};
 
@@ -903,9 +924,14 @@ bool install_gles_shim(const std::string& R, const std::string& lib_dir, std::st
         return fail_errno(error, "rename " + earlier);
     unlink(earlier.c_str());
     const auto shim = read_file(lib_dir + "/libvine_gles_shim.so");
+    const auto egl_shim = read_file(lib_dir + "/libvine_egl_shim.so");
     const auto gles = read_file(egl + "/libGLESv2_angle.so");
+    // ANGLE's EGL library, behind egl_shim.c once that takes its name
+    const std::string angle_egl = egl + "/eglSubDriverAndroid.so";
     auto egl_lib = read_file(egl + "/libEGL_angle.so");
-    if (!shim || !gles || !egl_lib) return true;
+    const bool egl_is_shim = egl_lib && egl_lib->find("/vendor/lib64/egl/eglSubDriverAndroid.so") != std::string::npos;
+    if (egl_is_shim) egl_lib = read_file(angle_egl);
+    if (!shim || !egl_shim || !gles || !egl_lib) return true;
     // The image's library, unless it is already a shim: any build of it, an
     // earlier one included, names the library it loads (gles_shim.c)
     const bool is_shim = gles->find("/vendor/lib64/egl/libllvm-glnext.so") != std::string::npos;
@@ -919,7 +945,8 @@ bool install_gles_shim(const std::string& R, const std::string& lib_dir, std::st
     bool changed = false;
     for (const auto& [from, to] : names)
         for (size_t at; (at = egl_lib->find(from)) != std::string::npos; changed = true) egl_lib->replace(at, from.size(), to);
-    if ((changed && !write_mode(egl + "/libEGL_angle.so", *egl_lib, 0644, error)) ||
+    if (((changed || !egl_is_shim) && !write_mode(angle_egl, *egl_lib, 0644, error)) ||
+        !write_mode(egl + "/libEGL_angle.so", *egl_shim, 0644, error) ||
         !write_mode(egl + "/libGLESv2_angle.so", *shim, 0644, error) ||
         !write_mode(egl + "/libGLESv1_CM_angle.so", *shim, 0644, error))
         return false;
@@ -1982,8 +2009,13 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
         !copy_mode(o.lib_dir + "/libvine_gralloc.so", hw + "/gralloc.default.so", 0644, error))
         return false;
     // $R/product is an absolute symlink, its files are in system/product
+    const bool clip_bridge = is_regular_file(o.lib_dir + "/libvine_clip_bridge.so");
+    if (clip_bridge && !copy_mode(o.lib_dir + "/libvine_clip_bridge.so", R + "/system/framework/vine-clip.jar", 0644, error))
+        return false;
     const std::string product_init = R + "/system/product/etc/init";
-    if (!mkdirs_or_fail(product_init, error) || !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu, o.ram_mb), 0644, error)) return false;
+    if (!mkdirs_or_fail(product_init, error) ||
+        !write_mode(product_init + "/vine-rootless.rc", rootless_rc(own_audio_hal, o.gpu, o.ram_mb, clip_bridge), 0644, error))
+        return false;
     const std::string product_vine = R + "/system/product/etc/vine";
     if (!mkdirs_or_fail(product_vine, error) || !write_mode(product_vine + "/reap_orphans.sh", kReapOrphans, 0755, error) ||
         !write_mode(product_vine + "/check_display.sh", kCheckDisplay, 0755, error) ||

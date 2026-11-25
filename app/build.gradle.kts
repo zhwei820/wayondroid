@@ -232,3 +232,16 @@ val buildPmPatch = tasks.register<Exec>("buildGuestPmPatch") {
     }
 }
 tasks.named("preBuild") { dependsOn(buildPmPatch) }
+
+// The guest's clipboard bridge (scripts/rootless/build-clip-bridge.sh): without it the guest's clipboard stays its own
+val buildClipBridge = tasks.register<Exec>("buildGuestClipBridge") {
+    workingDir = rootProject.projectDir
+    doFirst { environment("ANDROID_HOME", androidComponents.sdkComponents.sdkDirectory.get().asFile.path) }
+    commandLine("scripts/rootless/build-clip-bridge.sh")
+    inputs.file(rootProject.file("scripts/rootless/build-clip-bridge.sh"))
+    inputs.dir(rootProject.file("scripts/rootless/clipbridge"))
+    for (abi in listOf("arm64-v8a", "x86_64")) {
+        outputs.file("$projectDir/src/main/jniLibs/$abi/libvine_clip_bridge.so")
+    }
+}
+tasks.named("preBuild") { dependsOn(buildClipBridge) }

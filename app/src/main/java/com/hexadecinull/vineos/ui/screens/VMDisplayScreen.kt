@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -82,6 +83,10 @@ fun VMDisplayScreen(instanceId: String, onBack: () -> Unit, modifier: Modifier =
     DisposableEffect(instanceId) {
         vm.attach(instanceId)
         onDispose { vm.detach() }
+    }
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(instanceId, windowFocused, vm.status) {
+        if (windowFocused) vm.pushHostClipboard(instanceId)
     }
     DisposableEffect(vm) {
         val handler = { event: KeyEvent -> vm.onHardwareKey(event) }

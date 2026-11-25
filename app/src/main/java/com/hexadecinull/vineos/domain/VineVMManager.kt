@@ -1,6 +1,8 @@
 package com.hexadecinull.vineos.domain
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -351,6 +353,29 @@ class VineVMManager @Inject constructor(
         helperFor(instanceId).send("agent_send", instanceId, GuestProtocol.textLine(text))
     }
 
+    // Plain text both ways, rootless guests only. The guest's changes arrive as "clip" events; the phone's go over when
+    // the display gains focus, as Android lets only the focused app read the clipboard. Both sides skip the text they
+    // last exchanged, or each copy would bounce back.
+    private val clipboard: ClipboardManager? by lazy { context.getSystemService(ClipboardManager::class.java) }
+    private val lastClip = ConcurrentHashMap<String, String>()
+
+    // False while the guest's clipboard is not reachable yet (booting), so the caller can try again
+    suspend fun pushHostClipboard(instanceId: String): Boolean {
+        if (!isRootless(instanceId) || flowFor(instanceId).value != VMStatus.RUNNING) return false
+        val text = runCatching {
+            clipboard?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+        }.getOrNull()
+        if (text.isNullOrEmpty() || text.length > MAX_CLIP_CHARS || text == lastClip[instanceId]) return true
+        if (!rootlessHelper.request("clip_set", instanceId, text, timeoutMs = 5_000).ok) return false
+        lastClip[instanceId] = text
+        return true
+    }
+
+    private fun onGuestClip(instanceId: String, text: String) {
+        if (text.isEmpty() || lastClip.put(instanceId, text) == text) return
+        runCatching { clipboard?.setPrimaryClip(ClipData.newPlainText("Wayondroid", text)) }
+    }
+
     suspend fun listApps(instanceId: String): Result<List<GuestApp>> {
         val failure = connectFor(instanceId)
         if (failure != null) return Result.failure(IOException(failure))
@@ -460,10 +485,14 @@ class VineVMManager @Inject constructor(
                 setStatus(id, status)
                 when (status) {
                     VMStatus.RUNNING -> pendingLaunch.remove(id)?.let { pkg -> scope.launch { launchWithRetry(id, pkg) } }
-                    VMStatus.STOPPED, VMStatus.ERROR -> pendingLaunch.remove(id)
+                    VMStatus.STOPPED, VMStatus.ERROR -> {
+                        pendingLaunch.remove(id)
+                        lastClip.remove(id) // the next boot's clipboard starts empty
+                    }
                     else -> Unit
                 }
             }
+            "clip" -> onGuestClip(f.getOrNull(0) ?: return, f.getOrNull(1).orEmpty())
             "snapshot", "restore" -> {
                 val e =
                     SnapshotEvent(
@@ -574,5 +603,7 @@ class VineVMManager @Inject constructor(
         private const val IDLE_SHUTDOWN_MS = 60_000L
         private const val LAUNCH_ATTEMPTS = 8
         private const val LAUNCH_RETRY_MS = 2_500L
+        // ClipBridge's limit
+        private const val MAX_CLIP_CHARS = 512 * 1024
     }
 }

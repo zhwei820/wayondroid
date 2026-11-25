@@ -115,6 +115,13 @@ void RootlessServer::tick() {
             last = now;
             emit("state", {name, now, in->state() == Instance::State::Error ? in->error() : ""});
         }
+        if (!in->booted() || !in->active()) {
+            clips_.erase(name);
+            continue;
+        }
+        auto& clip = clips_[name];
+        if (!clip) clip = std::make_unique<ClipLink>(in->layout().run + "/clip");
+        for (const auto& text : clip->poll()) emit("clip", {name, text});
     }
 }
 
@@ -169,6 +176,8 @@ void RootlessServer::dispatch(const std::string& id, const std::string& cmd, con
         reply(id, false, "Snapshots are not available for rootless instances yet");
     } else if (cmd == "snapshots") {
         reply(id, true, "");
+    } else if (cmd == "clip_set") {
+        cmd_clip_set(id, args);
     } else if (cmd == "rmtree") {
         cmd_rmtree(id, args);
     } else if (cmd == "quit") {
@@ -284,6 +293,14 @@ void RootlessServer::cmd_launch(const std::string& id, const std::vector<std::st
     const auto r = in->exec({"sh", "-c", kLaunchScript, "sh", args[1]}, 15000);
     if (!r.error.empty()) return reply(id, false, r.error);
     reply(id, r.exit_code == 0, r.exit_code == 0 ? "" : "could not launch " + args[1]);
+}
+
+// clip_set <instance> <text>: the guest's clipboard becomes text, once the guest's bridge is up
+void RootlessServer::cmd_clip_set(const std::string& id, const std::vector<std::string>& args) {
+    if (args.size() < 2) return reply(id, false, "usage: clip_set <instance> <text>");
+    auto it = clips_.find(args[0]);
+    const bool ok = it != clips_.end() && it->second->set(args[1]);
+    reply(id, ok, ok ? "" : "the guest's clipboard is not reachable");
 }
 
 void RootlessServer::cmd_rmtree(const std::string& id, const std::vector<std::string>& args) {

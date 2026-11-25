@@ -171,6 +171,14 @@ class VMDisplayViewModel @Inject constructor(
 
     fun pressRecents() = pressKey(KeyEvent.KEYCODE_APP_SWITCH)
 
+    // The phone's clipboard into the guest. Retries while the guest's clipboard bridge comes up after boot.
+    suspend fun pushHostClipboard(id: String) {
+        repeat(CLIP_ATTEMPTS) {
+            if (vmManager.pushHostClipboard(id)) return
+            delay(CLIP_RETRY_MS)
+        }
+    }
+
     // Volume keys go to the guest while it runs; it makes its own repeats
     fun onHardwareKey(event: KeyEvent): Boolean {
         if (event.keyCode !in GUEST_KEYS || !isActive) return false
@@ -200,6 +208,8 @@ class VMDisplayViewModel @Inject constructor(
     companion object {
         private const val OPEN_RETRY_MS = 500L
         private const val INFO_POLL_MS = 400L
+        private const val CLIP_ATTEMPTS = 15
+        private const val CLIP_RETRY_MS = 2_000L
         private val GUEST_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
     }
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "clip_link.h"
 #include "line_server.h"
 #include "../rootless/rootless_instance.h"
 
@@ -34,6 +35,7 @@ private:
     void cmd_apps(const std::string& id, const std::vector<std::string>& args);
     void cmd_launch(const std::string& id, const std::vector<std::string>& args);
     void cmd_rmtree(const std::string& id, const std::vector<std::string>& args);
+    void cmd_clip_set(const std::string& id, const std::vector<std::string>& args);
 
     rootless::Instance* find(const std::string& instance);
     rootless::Instance* running(const std::string& id, const std::vector<std::string>& args);
@@ -42,6 +44,7 @@ private:
     RootlessOptions options_;
     std::unordered_map<std::string, std::unique_ptr<rootless::Instance>> instances_;
     std::unordered_map<std::string, std::string> last_state_;
+    std::unordered_map<std::string, std::unique_ptr<ClipLink>> clips_;
 };
 
 } // namespace vine
