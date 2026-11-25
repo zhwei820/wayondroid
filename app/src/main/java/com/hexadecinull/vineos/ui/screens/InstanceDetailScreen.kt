@@ -152,7 +152,6 @@ fun InstanceDetailScreen(
 
             OutlinedButton(
                 onClick = { onInstallFromPhone(instance.id) },
-                enabled = instance.status == VMStatus.RUNNING,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Outlined.InstallMobile, contentDescription = null, modifier = Modifier.size(18.dp))

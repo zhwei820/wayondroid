@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Android
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -75,16 +76,17 @@ fun HostAppsScreen(instanceId: String, onBack: () -> Unit, modifier: Modifier = 
         Column(Modifier.fillMaxSize().padding(padding)) {
             val blocker = when {
                 !state.rootless -> "Installing from the phone needs a rootless instance."
-                state.status != VMStatus.RUNNING -> "Start the instance first; apps are installed into the running guest."
+                state.status == VMStatus.BOOTING -> "Starting the instance. You can install once it has booted."
+                state.status != VMStatus.RUNNING -> "Apps are installed into the running guest. Start the instance first."
                 else -> null
             }
             if (blocker != null) {
-                Text(
-                    blocker,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(16.dp),
-                )
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(blocker, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (state.rootless && state.status in listOf(VMStatus.STOPPED, VMStatus.ERROR)) {
+                        Button(onClick = vm::start) { Text("Start instance") }
+                    }
+                }
             }
             state.progress?.let { line ->
                 Row(

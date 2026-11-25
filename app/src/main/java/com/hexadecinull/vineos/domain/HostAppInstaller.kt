@@ -63,7 +63,8 @@ class HostAppInstaller @Inject constructor(
 
         // Guest path /data/local/tmp/hostinstall-<pkg>; package names are [A-Za-z0-9_.] so it needs no shell quoting
         val guestDir = "/data/local/tmp/hostinstall-${app.packageName}"
-        val hostDir = File(provisioner.instanceDir(instanceId), "rootless/data$guestDir")
+        // rootless/data is the guest's /data
+        val hostDir = File(provisioner.instanceDir(instanceId), "rootless$guestDir")
         val needed = app.totalBytes
         if (provisioner.freeBytes() < needed + FREE_MARGIN) {
             error("Not enough free space: ${app.label} needs ${needed / MB} MB")

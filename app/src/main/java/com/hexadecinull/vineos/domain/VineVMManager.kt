@@ -197,7 +197,10 @@ class VineVMManager @Inject constructor(
         val reply = helperFor(instanceId).request("exec", instanceId, timeoutMs.toString(), *argv, timeoutMs = timeoutMs + 5_000L)
         if (!reply.ok) return Result.failure(IOException(reply.payload))
         val code = reply.payload.substringBefore('\n').removePrefix("exit=").toIntOrNull()
-        val output = reply.payload.substringAfter('\n', "")
+        // The guest linker warns about its missing /linkerconfig on every exec; it would crowd out real errors
+        val output = reply.payload.substringAfter('\n', "").lineSequence()
+            .filterNot { it.startsWith("WARNING: linker:") }
+            .joinToString("\n")
         return if (code == 0) Result.success(output) else Result.failure(IOException("exit=$code: ${output.take(200)}"))
     }
 

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hexadecinull.vineos.data.models.VMStatus
+import com.hexadecinull.vineos.data.repository.InstanceRepository
 import com.hexadecinull.vineos.domain.HostApp
 import com.hexadecinull.vineos.domain.HostAppInstaller
 import com.hexadecinull.vineos.domain.VineVMManager
@@ -39,6 +40,7 @@ data class HostAppsUiState(
 class HostAppsViewModel @Inject constructor(
     private val installer: HostAppInstaller,
     private val vmManager: VineVMManager,
+    private val instanceRepo: InstanceRepository,
 ) : ViewModel() {
     private val state = MutableStateFlow(HostAppsUiState())
     val uiState: StateFlow<HostAppsUiState> = state.asStateFlow()
@@ -61,6 +63,13 @@ class HostAppsViewModel @Inject constructor(
                 val icon = installer.loadIcon(app.packageName, ICON_PX) ?: continue
                 state.update { it.copy(icons = it.icons + (app.packageName to icon)) }
             }
+        }
+    }
+
+    fun start() {
+        viewModelScope.launch {
+            val instance = instanceRepo.getById(state.value.instanceId) ?: return@launch
+            vmManager.startInstance(instance)
         }
     }
 
