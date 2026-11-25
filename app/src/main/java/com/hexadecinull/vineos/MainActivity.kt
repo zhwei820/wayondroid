@@ -51,6 +51,7 @@ import com.hexadecinull.vineos.ui.screens.AppSettings
 import com.hexadecinull.vineos.ui.screens.AppShortcutsScreen
 import com.hexadecinull.vineos.ui.screens.CreateInstanceScreen
 import com.hexadecinull.vineos.ui.screens.HomeScreen
+import com.hexadecinull.vineos.ui.screens.HostAppsScreen
 import com.hexadecinull.vineos.ui.screens.InstanceDetailScreen
 import com.hexadecinull.vineos.ui.screens.LicenseDetailScreen
 import com.hexadecinull.vineos.ui.screens.LicensesScreen
@@ -269,8 +270,14 @@ fun WayondroidApp(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit
                     onBack = { navController.popBackStack() },
                     onLaunch = { navController.navigate(Screen.VMDisplay.createRoute(it)) },
                     onDeleted = { navController.popBackStack() },
+                    onInstallFromPhone = { navController.navigate(Screen.HostApps.createRoute(it)) },
                     modifier = Modifier.fillMaxSize(),
                 )
+            }
+
+            composable(Screen.HostApps.route) { back ->
+                val id = back.arguments?.getString("instanceId") ?: return@composable
+                HostAppsScreen(instanceId = id, onBack = { navController.popBackStack() }, modifier = Modifier.fillMaxSize())
             }
 
             composable(Screen.ROMDetail.route) { back ->

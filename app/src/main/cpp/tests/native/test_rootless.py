@@ -532,16 +532,9 @@ def main():
     inst64 = os.path.join(base, name64)
     os.makedirs(inst64)
     build_images(top, inst64, audio_hal_class=2, sensors_libs=False, radio_libs=False)
-    with open(os.path.join(inst64, "manifest.json"), "w") as f:
-        f.write('{"kind": "waydroid", "identity": "grapheneos"}\n')
     ok, text = h.call("start", name64, inst64)
     check(ok and h.wait_state(name64, "running") is not None, "64-bit image boots: " + text)
     R64 = os.path.join(inst64, "rootless/rootfs")
-    prop64 = read(os.path.join(R64, "system/build.prop"))
-    check("ro.build.fingerprint=google/redfin/redfin:13/TQ3A.230901.001/2023100300:user/release-keys\n" in prop64 and
-          "ro.build.display.id=TQ3A.230901.001.2023100300\n" in prop64 and "ro.build.host=grapheneos\n" in prop64,
-          "GrapheneOS build: " + prop64)
-    check("androidboot.verifiedbootstate=yellow " in read(os.path.join(inst64, "rootless/tawcroot/cmdline")), "GrapheneOS boot state")
     check(not os.path.exists(os.path.join(R64, "vendor/bin/hw/vine_hal_service")), "no own audio HAL")
     check("vine_hal_service" not in read(os.path.join(R64, "system/product/etc/init/vine-rootless.rc")), "rc keeps the image's")
     check(not os.path.exists(os.path.join(R64, "vendor/etc/init/android.hardware.sensors@2.1-service-multihal.rc")), "no sensors HAL without the image's libraries")

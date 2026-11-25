@@ -65,7 +65,7 @@ class ROMRepository @Inject constructor(@ApplicationContext private val context:
         }
     }
 
-    private fun fileOf(rom: ROMImage): File = File(romsDir, "${rom.fileId.ifEmpty { rom.id }}.vrom")
+    private fun fileOf(rom: ROMImage): File = File(romsDir, "${rom.id}.vrom")
 
     // A built-in ROM's file is packed here and renamed into place whole, so it is valid when present
     private fun withLocalState(rom: ROMImage): ROMImage {
@@ -371,16 +371,12 @@ class ROMRepository @Inject constructor(@ApplicationContext private val context:
     }
 
     private fun updateProgress(romId: String, downloaded: Long, total: Long, state: ROMDownloadState) {
-        val file = getRom(romId)?.let(::fileOf)
-        val ids = _manifestRoms.value.filter { file != null && fileOf(it) == file }.map { it.id }.ifEmpty { listOf(romId) }
-        _downloadProgress.value = _downloadProgress.value + ids.map { it to DownloadProgress(it, downloaded, total, state) }
+        _downloadProgress.value = _downloadProgress.value + (romId to DownloadProgress(romId, downloaded, total, state))
     }
 
-    // Every entry kept in the same file as `changed`
     private fun refreshROM(changed: ROMImage, localFile: File?) {
-        val file = fileOf(changed)
         _manifestRoms.value = _manifestRoms.value.map { rom ->
-            if (fileOf(rom) == file) {
+            if (rom.id == changed.id) {
                 rom.copy(
                     localPath = localFile?.absolutePath,
                     isDownloaded = localFile != null,
@@ -408,26 +404,24 @@ class ROMRepository @Inject constructor(@ApplicationContext private val context:
         private const val WAYDROID_OTA_BASE = "https://ota.waydro.id"
         private val activeDownloads = ConcurrentHashMap.newKeySet<String>()
 
-        // One download, two devices the guest can present
-        private val BUILTIN_ROMS = listOf("" to "Pixel 5 (vanilla)", "grapheneos" to "Pixel 5 (GrapheneOS)").map { (identity, name) ->
+        // Waydroid LineageOS 20 presented as a Pixel 5, with Google apps or without
+        private val BUILTIN_ROMS = listOf("GAPPS" to "Pixel 5 (GMS)", "VANILLA" to "Pixel 5 (Vanilla)").map { (type, name) ->
             ROMImage(
-                id = "waydroid-lineage20-vanilla" + if (identity.isEmpty()) "" else "-$identity",
+                id = "waydroid-lineage20-${type.lowercase()}",
                 displayName = name,
                 androidVersion = "13",
                 apiLevel = 33,
-                description = if (identity.isEmpty()) {
-                    "Waydroid LineageOS 20 without Google apps, presented as a Pixel 5 on Google's factory firmware"
+                description = if (type == "GAPPS") {
+                    "Waydroid LineageOS 20 with Google apps (GMS), presented as a Pixel 5"
                 } else {
-                    "Waydroid LineageOS 20 without Google apps, presented as a Pixel 5 reflashed with GrapheneOS"
+                    "Waydroid LineageOS 20 without Google apps, presented as a Pixel 5"
                 },
-                downloadUrl = WAYDROID_OTA + "VANILLA",
+                downloadUrl = WAYDROID_OTA + type,
                 sha256 = "",
                 sizeBytes = 0L,
                 supportedAbis = listOf("arm64-v8a"),
                 has32BitSupport = false,
                 releaseDate = "",
-                identity = identity,
-                fileId = "waydroid-lineage20-vanilla",
             )
         }
 

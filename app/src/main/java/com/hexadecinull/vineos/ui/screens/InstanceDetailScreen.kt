@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.HighQuality
+import androidx.compose.material.icons.outlined.InstallMobile
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ fun InstanceDetailScreen(
     onBack: () -> Unit,
     onLaunch: (String) -> Unit,
     onDeleted: () -> Unit,
+    onInstallFromPhone: (String) -> Unit,
     modifier: Modifier = Modifier,
     vm: InstanceDetailViewModel = hiltViewModel(),
 ) {
@@ -146,6 +148,16 @@ fun InstanceDetailScreen(
                 ) {
                     Icon(Icons.Filled.Delete, contentDescription = "Delete")
                 }
+            }
+
+            OutlinedButton(
+                onClick = { onInstallFromPhone(instance.id) },
+                enabled = instance.status == VMStatus.RUNNING,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.InstallMobile, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Install apps from phone")
             }
 
             DisplaySection(

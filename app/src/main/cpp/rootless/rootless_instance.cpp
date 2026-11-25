@@ -309,7 +309,7 @@ bool Instance::launch_services(std::string* error) {
     const std::string& W = layout_.work;
     // Paths relative to W: the app data dir leaves no room in sun_path
     // The identity's panel, not the phone's: apps read the screen's size
-    const DeviceIdentity id = rootfs_identity(layout_.rootfs, layout_.instance);
+    const DeviceIdentity id = rootfs_identity(layout_.rootfs);
     if (id.width > 0 && id.height > 0) {
         cfg_.width = id.width;
         cfg_.height = id.height;

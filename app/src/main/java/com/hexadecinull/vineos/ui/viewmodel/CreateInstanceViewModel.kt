@@ -88,7 +88,7 @@ class CreateInstanceViewModel @Inject constructor(
         viewModelScope.launch {
             val instanceId = UUID.randomUUID().toString()
             val storage = StorageSizing.clamp(selectedStorageMb.value, StorageSizing.maxMb(provisioner.freeBytes()))
-            val result = provisioner.create(romFile, instanceId, selectedRom.identity) { progress ->
+            val result = provisioner.create(romFile, instanceId) { progress ->
                 stateFlow.value = CreateInstanceState.Creating(progress.fraction, progress.step)
             }
             result.onFailure { error ->

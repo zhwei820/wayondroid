@@ -53,10 +53,6 @@ data class ROMImage(
     val localPath: String? = null,
     val isDownloaded: Boolean = false,
     val downloadState: ROMDownloadState = ROMDownloadState.NOT_DOWNLOADED,
-    // The device the guest presents, read by rootless prep from the instance's manifest.json: "" (a factory Pixel 5) or "grapheneos"
-    val identity: String = "",
-    // The .vrom's name in the ROM folder when entries share one download ("" uses id)
-    val fileId: String = "",
 )
 
 enum class ROMDownloadState {

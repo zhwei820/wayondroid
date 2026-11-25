@@ -29,6 +29,14 @@
     <!-- Required for vibration feedback in the UI -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Lists the phone's launchable apps for installing them into a guest -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".VineApplication"
         android:allowBackup="false"

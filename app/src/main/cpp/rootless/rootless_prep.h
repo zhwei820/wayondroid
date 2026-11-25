@@ -51,17 +51,11 @@ std::string props_64bit_only(const std::string& build_prop);
 struct DeviceIdentity {
     std::string brand, manufacturer, model, name, device, board, hardware;
     std::string build_id, incremental, fingerprint, description, flavor, build_host, build_product;
-    std::string build_user = "android-build";
-    std::string display_id; // ro.build.display.id, "" for build_id
-    std::string persona;    // guest_identity()'s, "" for Google's firmware
     std::string date, date_utc, security_patch, soc_manufacturer, soc_model;
     // androidboot.* the bootloader passes: ro.bootloader, ro.baseband, ro.revision
     std::string bootloader, baseband, revision;
     // The panel: the guest's screen is this size whatever the phone's
     int width = 0, height = 0, dpi = 0, refresh_hz = 0;
-    // androidboot.verifiedbootstate: green for Google's firmware, yellow
-    // for an OS signed with its own key on a relocked bootloader
-    std::string verified_boot_state = "green";
     // The device's own build.prop lines, exact; they win over the fields
     std::vector<std::pair<std::string, std::string>> props;
     bool empty() const { return brand.empty() || model.empty() || device.empty(); }
@@ -71,16 +65,11 @@ struct DeviceIdentity {
 // guest's Android version, unlike the phone. A Snapdragon, as the phone
 // is, so the GPU's vendor agrees. Values from the factory image's
 // build.props (redfin TQ3A.230901.001.C2).
-//
-// persona "grapheneos": the same phone reflashed with GrapheneOS's
-// Android 13 build of redfin (no Google apps, as GrapheneOS ships), on a
-// relocked bootloader. Anything else: Google's factory firmware.
-DeviceIdentity guest_identity(const std::string& persona = "");
+DeviceIdentity guest_identity();
 
-// guest_identity() with the persona the instance's manifest.json names
-// ("identity"), or none when the extracted image at `rootfs` is not the
-// Android release it describes
-DeviceIdentity rootfs_identity(const std::string& rootfs, const std::string& instance = "");
+// guest_identity(), or none when the extracted image at `rootfs` is not
+// the Android release it describes
+DeviceIdentity rootfs_identity(const std::string& rootfs);
 
 // A build.prop presenting `id` as a release build: every partition's
 // product, build id, fingerprint, dates and patch level, release-keys

@@ -13,8 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -40,18 +38,14 @@ data class VromManifest(val supportedAbis: List<String>, val sha256: Map<String,
 
 // Unpacks a .vrom into a new instance directory. The guest's own kernel entry is skipped, guests run on the phone's kernel.
 @Singleton
-class InstanceProvisioner @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val grapheneApps: GrapheneApps,
-) {
+class InstanceProvisioner @Inject constructor(@ApplicationContext private val context: Context) {
     val instancesDir: File = File(context.filesDir, "instances").also { it.mkdirs() }
 
     fun instanceDir(instanceId: String): File = File(instancesDir, instanceId)
 
     fun freeBytes(): Long = runCatching { StatFs(instancesDir.path).availableBytes }.getOrDefault(0L)
 
-    // identity: the device the guest presents (ROMImage.identity), written into the instance's manifest.json
-    suspend fun create(vrom: File, instanceId: String, identity: String = "", onProgress: (ProvisionProgress) -> Unit): Result<File> =
+    suspend fun create(vrom: File, instanceId: String, onProgress: (ProvisionProgress) -> Unit): Result<File> =
         withContext(Dispatchers.IO) {
             val dir = instanceDir(instanceId)
             try {
@@ -70,7 +64,7 @@ class InstanceProvisioner @Inject constructor(
                     if (dir.exists()) throw IOException("The instance folder already exists")
                     if (!dir.mkdirs()) throw IOException("Could not create the instance folder")
 
-                    File(dir, MANIFEST).writeText(withIdentity(manifestText, identity))
+                    File(dir, MANIFEST).writeText(manifestText)
                     var done = 0L
                     var lastReport = 0L
                     for ((name, entry) in wanted) {
@@ -102,9 +96,6 @@ class InstanceProvisioner @Inject constructor(
                         if (!tmp.renameTo(target)) throw IOException("Could not finish writing $name")
                     }
                 }
-                if (identity == GRAPHENEOS) {
-                    grapheneApps.download(File(dir, "system-apps")) { onProgress(ProvisionProgress(1f, it)) }
-                }
                 Result.success(dir)
             } catch (e: Exception) {
                 dir.deleteRecursively()
@@ -113,12 +104,6 @@ class InstanceProvisioner @Inject constructor(
             }
         }
 
-    private fun withIdentity(manifestText: String, identity: String): String {
-        if (identity.isEmpty()) return manifestText
-        val root = Json.parseToJsonElement(manifestText).jsonObject
-        return JsonObject(root + ("identity" to JsonPrimitive(identity))).toString() + "\n"
-    }
-
     fun readManifest(instanceDir: File): VromManifest {
         val f = File(instanceDir, MANIFEST)
         return if (f.isFile) VromManifest.parse(f.readText()) else VromManifest(emptyList(), emptyMap())
@@ -126,7 +111,6 @@ class InstanceProvisioner @Inject constructor(
 
     companion object {
         const val MANIFEST = "manifest.json"
-        const val GRAPHENEOS = "grapheneos"
         private val PAYLOAD = listOf("ramdisk.img", "vendor.img", "system.img")
         private const val BUFFER = 256 * 1024
         private const val REPORT_STEP = 4L * 1024 * 1024
