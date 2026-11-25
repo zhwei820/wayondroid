@@ -603,17 +603,19 @@ public class Main extends Activity {
             final android.media.ImageReader reader = android.media.ImageReader.newInstance(width, height, android.graphics.ImageFormat.JPEG, 2);
             reader.setOnImageAvailableListener(r -> {
                 android.media.Image img = r.acquireLatestImage();
-                if (img != null && (++frames[0] < 2 || android.os.SystemClock.uptimeMillis() - since[0] < 3000)) {
-                    img.close();
-                } else if (img != null && done.getCount() > 0) {
+                if (img == null) return;
+                try {
+                    /* every frame is closed: the reader holds 2, and the camera keeps streaming until cleanup */
+                    if (++frames[0] < 2 || android.os.SystemClock.uptimeMillis() - since[0] < 3000 || done.getCount() == 0) return;
                     java.nio.ByteBuffer b = img.getPlanes()[0].getBuffer();
                     byte[] jpeg = new byte[b.remaining()];
                     b.get(jpeg);
                     android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
                     result[0] = "frames=" + frames[0] + " jpeg " + jpeg.length + " " + (bm == null ? "undecodable" : bm.getWidth() + "x" + bm.getHeight()
                             + " px(320,240)=" + Integer.toHexString(bm.getPixel(320, 240)) + " detail=" + detail(bm));
-                    img.close();
                     done.countDown();
+                } finally {
+                    img.close();
                 }
             }, h);
             cm.openCamera(id, new android.hardware.camera2.CameraDevice.StateCallback() {
