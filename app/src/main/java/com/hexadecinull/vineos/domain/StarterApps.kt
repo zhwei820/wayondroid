@@ -140,7 +140,7 @@ class StarterApps @Inject constructor(
                     "https://d.apkpure.com/b/APK/com.microsoft.emmx?version=latest",
                 ),
                 afterInstall = "cmd role add-role-holder --user 0 android.app.role.BROWSER com.microsoft.emmx && " +
-                    "pm disable-user --user 0 com.android.chrome",
+                    "{ ! pm path com.android.chrome >/dev/null || pm disable-user --user 0 com.android.chrome; }",
             ),
             Starter("com.follow.clash", "FlClash", emptyList()),
         )
