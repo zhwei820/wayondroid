@@ -66,7 +66,7 @@ public class Main extends Activity {
 
     /** Every non-one-shot sensor, from onCreate until closed */
     final Map<Sensor, Reading> live = new LinkedHashMap<>();
-    final long liveSince = System.currentTimeMillis();
+    volatile long liveSince;
     SensorManager liveManager;
     HandlerThread liveThread;
     final Handler ui = new Handler(Looper.getMainLooper());
@@ -92,7 +92,9 @@ public class Main extends Activity {
         return b.toString();
     }
 
-    void startLive() {
+    synchronized void startLive() {
+        if (liveManager != null) return;
+        liveSince = System.currentTimeMillis();
         liveManager = getSystemService(SensorManager.class);
         liveThread = new HandlerThread("live");
         liveThread.start();
@@ -154,21 +156,40 @@ public class Main extends Activity {
         root.addView(close);
         root.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
-        startLive();
         new Thread(() -> {
             String[] steps = {"build", "props", "telephony", "network", "sensors", "gl", "files", "hw", "packages"};
             for (String s : steps) {
-                try {
-                    getClass().getDeclaredMethod(s).invoke(this);
-                } catch (Throwable t) {
-                    put(s + ".error", t.getCause() != null ? t.getCause() : t);
+                /* files/progress.txt names the step under way: run.sh shows it if the report never comes */
+                try (FileOutputStream f = new FileOutputStream(new File(getFilesDir(), "progress.txt"))) {
+                    f.write((s + " " + System.currentTimeMillis() + "\n").getBytes());
+                } catch (Exception ignored) {
                 }
+                final Throwable[] err = {null};
+                Thread t = new Thread(() -> {
+                    try {
+                        getClass().getDeclaredMethod(s).invoke(this);
+                    } catch (Throwable e) {
+                        err[0] = e.getCause() != null ? e.getCause() : e;
+                    }
+                }, "step-" + s);
+                long t0 = System.currentTimeMillis();
+                t.start();
+                try {
+                    t.join(60000);
+                } catch (InterruptedException ignored) {
+                }
+                if (t.isAlive()) put(s + ".timeout", "still running after 60 s");
+                else if (err[0] != null) put(s + ".error", err[0]);
+                put("time." + s, (System.currentTimeMillis() - t0) + " ms");
             }
             try (FileOutputStream f = new FileOutputStream(new File(getFilesDir(), "report.txt"))) {
                 f.write(out.toString().getBytes());
             } catch (Exception ignored) {
             }
-            ui.post(() -> status.setText("报告已写入。看完读数后点「关闭」结束。"));
+            ui.post(() -> {
+                status.setText("报告已写入。看完读数后点「关闭」结束。");
+                startLive();
+            });
         }).start();
     }
 
@@ -284,6 +305,7 @@ public class Main extends Activity {
             put("sensor." + s.getType() + (s.isWakeUpSensor() ? ".wakeup" : ""),
                 s.getName() + " | " + s.getVendor() + " | mode=" + s.getReportingMode());
         /* what the live listeners got in their first seconds; on-change sensors only report changes */
+        startLive();
         long wait = liveSince + 6000 - System.currentTimeMillis();
         if (wait > 0) {
             try {
