@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.InstallMobile
 import androidx.compose.material.icons.outlined.Speed
@@ -46,6 +47,7 @@ fun InstanceDetailScreen(
     onLaunch: (String) -> Unit,
     onDeleted: () -> Unit,
     onInstallFromPhone: (String) -> Unit,
+    onFiles: (String) -> Unit,
     modifier: Modifier = Modifier,
     vm: InstanceDetailViewModel = hiltViewModel(),
 ) {
@@ -157,6 +159,15 @@ fun InstanceDetailScreen(
                 Icon(Icons.Outlined.InstallMobile, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Install apps from phone")
+            }
+
+            OutlinedButton(
+                onClick = { onFiles(instance.id) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Files (import / export)")
             }
 
             DisplaySection(

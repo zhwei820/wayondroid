@@ -31,6 +31,9 @@ sealed class Screen(val route: String) {
     data object HostApps : Screen("host_apps/{instanceId}") {
         fun createRoute(instanceId: String) = "host_apps/$instanceId"
     }
+    data object GuestFiles : Screen("guest_files/{instanceId}") {
+        fun createRoute(instanceId: String) = "guest_files/$instanceId"
+    }
     data object AppShortcuts : Screen("app_shortcuts")
     data object About : Screen("about")
     data object Licenses : Screen("licenses")
