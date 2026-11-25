@@ -30,8 +30,8 @@
    - 网络接口只有 `dummy0 wlan0 ifb0 lo ifb1`（`rmnet_*` 有意不列）
    - 162 个包、无 GMS / Play（用户未要求补齐）
    - `supportedModemCount=1`（Pixel 5 有 eSIM，预期 2，未核对）
-3. **探针覆盖不到、但应用可测的底层差异**：CPU ID 寄存器、真实内核 5.10 的系统调用集、
-   性能与时序，见「附：已知的探针盲区」。
+3. **探针覆盖不到、且不做修复的底层差异**：CPU ID 寄存器与指令集、真实内核 5.10 的
+   系统调用集、性能与时序、GPU 驱动行为、硬件密钥认证等，见「附：硬不可修复层」。
 4. **待核对值**：`Build.HOST`、传感器器件型号、`MemTotal`、`ro.build.date`、
    `phoneCount` / `supportedModemCount`、超广角相机组成。
 
@@ -200,14 +200,26 @@ Chrome / TrichromeLibrary 的 APK 内有 `lib/arm64-v8a/libmonochrome_64.so`（�
 | gsm.version.ril-impl | Qualcomm RIL 1.0 | 同左 | 同左 | ✅ |
 | bt | 关闭，name=Pixel 5，addr 02:00…（应用无 LOCAL_MAC 权限时的正常值） | — | 同左 | ⚠️ 开启后的行为未测 |
 
+## 附：硬不可修复层（不做修复）
+
+以下差异由宿主硬件、宿主内核或缺失的硬件信任根决定，用户态（props / shim / seccomp）
+改不掉，**明确不做修复**。
+
+| 层 | 具体信号 | 为什么不可修复 |
+|---|---|---|
+| CPU ID 寄存器 | EL0 执行 `mrs MIDR_EL1`、`ID_AA64ISAR*_EL1` 等返回宿主 SoC 真实值 | arm64 内核在 EL0 模拟这些寄存器，返回值由当前 CPU 决定，用户态无法拦截；与伪装的 `/proc/cpuinfo`、HWCAP 必然矛盾 |
+| CPU 指令集能力 | 直接执行 sha3 / i8mm / sm4 等 SM7250 不支持的指令会成功 | 指令是否可用由真实 CPU 决定，seccomp 只能拦系统调用，拦不住指令执行 |
+| 真实内核版本与系统调用集 | `uname` 可伪装 4.19，但 `pidfd_open`、`close_range` 等 5.x 调用真实可用 | 系统调用存在性由宿主内核决定；seccomp 可以拒绝某些调用，但无法让 5.10 内核“假装没有”这些调用 |
+| 内核安全状态 | `Seccomp_filters`、SIGSYS 行为、`NoNewPrivs`、SELinux enforcing 细节 | 由宿主内核和 seccomp 机制真实决定，guest 内可读的 `/proc/self/status` 反映的是真实状态 |
+| 性能与时序 | CPU 跑分远高于 Pixel 5 的 765G；tawcroot 系统调用拦截、binderd Unix socket 转发、ANGLE 渲染引入额外延迟 | 由真实执行路径和硬件性能决定，无法通过 props 或 shim 消除；计时侧信道可测出 |
+| GPU 驱动真实行为 | 字符串可伪装 Adreno 620 / ES 3.2，但渲染由 ANGLE-on-Vulkan 完成；shader 编译时序、扩展真实行为、驱动私有查询与原生 Adreno 不同 | 驱动实现不同，用户态改名改不掉；GL 扩展集可过滤，但底层渲染路径和时序改不了 |
+| Play Integrity / 硬件密钥认证 | 依赖真实设备 keybox、TEE/StrongBox、系统完整性状态 | rootless、无 Zygisk、无 Magisk 的环境几乎走不通；伪造 attestation 维护成本极高且合规风险不可控 |
+| 物理传感器真实噪声与跨传感器相关性 | 宿主传感器数据可透传，但合成传感器（如气压计）的噪声分布、温度漂移、静止方差与真实器件不同；跨传感器相关性难以完全复现 | 没有真实 Pixel 5 传感器日志作参照就无法验证“合成得更真”；物理器件的噪声特性不可精确模拟 |
+| 相机硬件能力与 ISP | 分辨率受限于手机相机流（1920×1440）；声明 level=3 / full / RAW 与实际出图可能不一致；超广角未暴露 | 真实出图能力由宿主相机硬件和 ISP 决定；可以调整声明使其与能力一致，但无法让宿主相机产出 Pixel 5 的全尺寸 / RAW 结果 |
+
 ## 附：已知的探针盲区
 
-- **CPU ID 寄存器**：arm64 内核会模拟 EL0 的 `mrs MIDR_EL1` / `ID_AA64ISAR*_EL1`，
-  返回宿主 SM8475 的真实值，与伪装的 `/proc/cpuinfo`、HWCAP 不一致；直接执行
-  sha3 / i8mm 等 SM7250 不支持的指令也会成功。用户态无法拦截。
-- **真实内核 5.10**：`uname` 显示 4.19，但 `pidfd_open`、`close_range` 等 5.x 才有的
-  系统调用可用，应用可据此反推内核版本。
-- **性能与时序**：CPU 跑分远高于 765G；tawcroot 处理系统调用带来的额外延迟可被计时测出。
+- 上表各层探针均未覆盖，应用可自行测出。
 - **相机全尺寸**：探针为省时只采 640×480，4032×3024 / 3264×2448 与 RAW 输出没有覆盖；
   声明 level full/raw 与全尺寸实际出图是否一致仍未知。
 - **mount 行数的参照**：218 行来自 Android 16 的 OnePlus 真机，不是 Pixel 5；
