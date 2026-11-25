@@ -37,7 +37,7 @@ LineageOS 20（Android 13）镜像。没有虚拟机，也没有内核模块：g
 | Google 应用 | GAPPS 镜像可运行 Google Play 服务 |
 | 内存 | 超出实例 RAM 设置或手机内存不足时，guest 会杀掉自己的缓存 App |
 | 每实例设置 | RAM、存储大小、帧率（最高到手机刷新率）和分辨率 |
-| App | Material You 界面、多实例、指向 guest App 的桌面快捷方式 |
+| App | Material You 界面、多实例、指向 guest App 的桌面快捷方式、把手机上的应用装进 guest |
 
 ## 要求
 

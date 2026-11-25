@@ -34,7 +34,7 @@ and a userspace binder (**binderd**).
 | Google apps | GAPPS images run Google Play services |
 | Memory | The guest kills its cached apps when it goes over the instance's RAM setting or the phone runs low |
 | Per instance | RAM, storage size, frame rate (up to the phone's refresh rate) and resolution |
-| App | Material You UI, multiple instances, home-screen shortcuts to guest apps |
+| App | Material You UI, multiple instances, home-screen shortcuts to guest apps, installing the phone's apps into a guest |
 
 ## Requirements
 

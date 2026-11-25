@@ -197,6 +197,9 @@ adb shell device_config put activity_manager max_phantom_processes 2147483647
    **Create Instance**。存储要预留约 ROM 两倍的空间；RAM 建议 3～4 GB，GAPPS 只给 1 GB 会频繁杀后台。
 3. **启动**：在实例详情点 **Launch**。首次启动要解压镜像并编译所有 App，需要几分钟。GAPPS 镜像首次开机先进 Google 开机向导。
 4. **停止**：实例详情点 **Stop**。
+5. **从手机安装应用**：实例运行时，在实例详情点 **Install apps from phone**，列表里是手机上能从桌面打开的应用，
+   点一项确认即装进 guest（含 split APK，只装应用不带数据）。只支持 rootless 实例；纯 32 位的应用会被 guest 的 pm 拒绝。
+   安装时 APK 先拷进实例目录，需要相当于 APK 大小再加 200 MB 的空闲空间。
 
 常用设置：
 
