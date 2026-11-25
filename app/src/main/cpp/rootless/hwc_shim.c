@@ -20,6 +20,7 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
+#include <link.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -264,12 +265,32 @@ static void touch_motion(void* data, void* touch, uint32_t time, int32_t id, wl_
     pending_pressure = -1;
 }
 
+static int find_wayland(struct dl_phdr_info* info, size_t size, void* out)
+{
+    (void)size;
+    if (info->dlpi_name && strstr(info->dlpi_name, "libwayland-client")) {
+        *(const char**)out = info->dlpi_name;
+        return 1;
+    }
+    return 0;
+}
+
 EXPORT int wl_proxy_add_listener(struct wl_proxy* proxy, void (**implementation)(void), void* data)
 {
     static int (*fn)(struct wl_proxy*, void (**)(void), void*);
     static const char* (*get_class)(struct wl_proxy*);
-    if (!fn) fn = (int (*)(struct wl_proxy*, void (**)(void), void*))dlsym(RTLD_NEXT, "wl_proxy_add_listener");
-    if (!get_class) get_class = (const char* (*)(struct wl_proxy*))dlsym(RTLD_NEXT, "wl_proxy_get_class");
+    if (!fn) {
+        /* libwayland-client comes with the hwcomposer, dlopen()ed after
+         * this preload and out of RTLD_NEXT's reach */
+        const char* path = NULL;
+        dl_iterate_phdr(find_wayland, &path);
+        void* h = path ? dlopen(path, RTLD_NOW | RTLD_NOLOAD) : NULL;
+        if (h) {
+            fn = (int (*)(struct wl_proxy*, void (**)(void), void*))dlsym(h, "wl_proxy_add_listener");
+            get_class = (const char* (*)(struct wl_proxy*))dlsym(h, "wl_proxy_get_class");
+        }
+        if (fn == wl_proxy_add_listener) fn = NULL;
+    }
     if (!fn) return -1;
     const char* cls = get_class ? get_class(proxy) : NULL;
     if (cls && !strcmp(cls, "wl_touch") && implementation && implementation[0] && implementation[2] && !real_touch_down) {
