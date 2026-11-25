@@ -98,7 +98,7 @@ fun ROMDetailScreen(
 
             DetailRow("Android version", rom.androidVersion)
             DetailRow("API level", rom.apiLevel.toString())
-            DetailRow("Size", formatBytes(rom.sizeBytes))
+            if (rom.sizeBytes > 0) DetailRow("Size", formatBytes(rom.sizeBytes))
             DetailRow("32-bit app support", if (rom.has32BitSupport) "Yes" else "No")
             DetailRow("Released", rom.releaseDate)
 

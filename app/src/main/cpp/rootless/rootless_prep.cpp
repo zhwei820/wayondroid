@@ -1171,8 +1171,10 @@ bool remove_foreign_apps(const std::string& R, std::string* error) {
 // stay as the Pixel ships them, a stub plus a compressed APK that
 // PackageManager unpacks into /data/app: loaded in place from the system
 // image, Chrome's linker can't load its library. Chrome replaces
-// LineageOS's browser, GoogleCamera its camera app.
-bool install_system_apps(const Layout& l, const std::string& R, std::string* error) {
+// LineageOS's browser, GoogleCamera its camera app. A GrapheneOS guest
+// gets its instance's <instance>/system-apps/ (GrapheneOS's apps, which the
+// app downloads) instead: Google's apps would contradict it.
+bool install_system_apps(const Layout& l, const std::string& R, const std::string& persona, std::string* error) {
     // <files>/instances/<id>
     std::string files = l.instance;
     while (files.size() > 1 && files.back() == '/') files.pop_back();
@@ -1181,7 +1183,7 @@ bool install_system_apps(const Layout& l, const std::string& R, std::string* err
         if (slash == std::string::npos || slash == 0) return true;
         files.resize(slash);
     }
-    const std::string src = files + "/system-apps";
+    const std::string src = persona.empty() ? files + "/system-apps" : l.instance + "/system-apps";
     auto entries = [](const std::string& dir) {
         std::vector<std::string> out;
         if (DIR* d = opendir(dir.c_str())) {
@@ -1209,7 +1211,7 @@ bool install_system_apps(const Layout& l, const std::string& R, std::string* err
             if (!copy_mode(from + "/" + f, to + "/" + f, 0644, error)) return false;
         }
         chrome |= n == "Chrome" || n == "Chrome-Stub";
-        camera |= n == "GoogleCamera";
+        camera |= n == "GoogleCamera" || n == "GrapheneOSCamera";
     }
     if (chrome && !remove_if_exists(app_dir + "Jelly", error)) return false;
     if (camera && !remove_if_exists(app_dir + "Aperture", error)) return false;
@@ -1646,7 +1648,41 @@ DeviceIdentity guest_identity(const std::string& persona) {
         {"ro.system_ext.build.type", "user"},
         {"ro.system_ext.build.version.incremental", "10753682"},
     };
-    if (persona == "grapheneos") id.verified_boot_state = "yellow";
+    if (persona != "grapheneos") return id;
+    // GrapheneOS 2023100300, its last Android 13 release for redfin, from
+    // its sources at that tag (build_id.mk, sysprop.mk, envsetup.sh):
+    // Google's generic TQ3A.230901.001 tag, BUILD_NUMBER as its build
+    // number, built as grapheneos@grapheneos. The bootloader and radio are
+    // Google's (its factory zip ships the same images). Patch level per
+    // its adevtool override for the Pixel 5 group; the release notes say
+    // 2023-10-01 for its devices generally. The build time is an estimate:
+    // the number says 2023-10-03, the second is unknown.
+    id.persona = persona;
+    id.verified_boot_state = "yellow";
+    const std::pair<std::string, std::string> swaps[] = {
+        {id.fingerprint, "google/redfin/redfin:13/TQ3A.230901.001/2023100300:user/release-keys"},
+        {id.description, "redfin-user 13 TQ3A.230901.001 2023100300 release-keys"},
+        {id.build_id, "TQ3A.230901.001"},
+        {id.incremental, "2023100300"},
+        {id.date, "Tue Oct  3 04:00:00 UTC 2023"},
+        {id.date_utc, "1696305600"},
+        {id.build_host, "grapheneos"},
+        {id.build_user, "grapheneos"},
+    };
+    for (auto& [k, v] : id.props) {
+        for (const auto& [from, to] : swaps)
+            if (v == from) v = to;
+        if (k == "ro.build.display.id") v = "TQ3A.230901.001.2023100300";
+    }
+    for (std::string* f : {&id.fingerprint, &id.description, &id.build_id, &id.incremental, &id.date, &id.date_utc,
+                           &id.build_host, &id.build_user}) {
+        for (const auto& [from, to] : swaps)
+            if (*f == from) {
+                *f = to;
+                break;
+            }
+    }
+    id.display_id = "TQ3A.230901.001.2023100300";
     return id;
 }
 
@@ -1688,8 +1724,7 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
             const std::string key = line.substr(0, eq);
             const std::string product = product_field(key), build = build_field(key);
             const std::string* set = nullptr;
-            static const std::string zero = "0", one = "1", none = "none", user = "user", release_keys = "release-keys",
-                                     android_build = "android-build";
+            static const std::string zero = "0", one = "1", none = "none", user = "user", release_keys = "release-keys";
             // The device's own line first, else one made from its fields
             for (const auto& [k, v] : id.props) {
                 if (k == key) set = &v;
@@ -1714,8 +1749,9 @@ std::string props_device(const std::string& build_prop, const DeviceIdentity& id
             // newer than the matrices know). Nothing else reads that result.
             else if (build == "type") set = &user;
             else if (build == "tags") set = &release_keys;
-            else if (build == "user") set = &android_build;
-            else if (build == "id" || build == "display.id") set = &id.build_id;
+            else if (build == "user") set = &id.build_user;
+            else if (build == "id") set = &id.build_id;
+            else if (build == "display.id") set = id.display_id.empty() ? &id.build_id : &id.display_id;
             else if (build == "version.incremental") set = &id.incremental;
             else if (build == "fingerprint") set = &id.fingerprint;
             else if (build == "description") set = &id.description;
@@ -2067,7 +2103,7 @@ bool prepare_rootfs(const Layout& l, const PrepOptions& o, std::string* error) {
     // the phone's battery
     if (!mkdirs_or_fail(l.work + "/power_supply", error) || chmod((l.work + "/power_supply").c_str(), 0755) != 0)
         return fail_errno(error, "chmod power_supply");
-    if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) || !install_system_apps(l, R, error) ||
+    if (!install_device_hals(R, error) || !remove_foreign_apps(R, error) || !install_system_apps(l, R, id.persona, error) ||
         (!id.empty() && !install_vendor_view(R, o.lib_dir, &extra_hidden, error)) ||
         !write_mode(l.store + "/app-hidden", app_hidden_list(R) + extra_hidden, 0644, error) ||
         !std::all_of(std::begin(kPatchedJars), std::end(kPatchedJars),

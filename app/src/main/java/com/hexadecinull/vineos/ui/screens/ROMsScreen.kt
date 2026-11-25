@@ -173,7 +173,7 @@ private fun ROMCard(
                     Spacer(Modifier.height(4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         rom.supportedAbis.forEach { abi -> ROMFeatureChip(label = abi) }
-                        ROMSizeChip(bytes = rom.sizeBytes)
+                        if (rom.sizeBytes > 0) ROMSizeChip(bytes = rom.sizeBytes)
                         if (rom.isLocal) ROMLocalChip()
                         when (runMode) {
                             AbiCompat.RunMode.QEMU        -> ROMQemuChip()

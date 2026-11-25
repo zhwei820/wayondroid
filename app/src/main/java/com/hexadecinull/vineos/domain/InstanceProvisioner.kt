@@ -40,7 +40,10 @@ data class VromManifest(val supportedAbis: List<String>, val sha256: Map<String,
 
 // Unpacks a .vrom into a new instance directory. The guest's own kernel entry is skipped, guests run on the phone's kernel.
 @Singleton
-class InstanceProvisioner @Inject constructor(@ApplicationContext private val context: Context) {
+class InstanceProvisioner @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val grapheneApps: GrapheneApps,
+) {
     val instancesDir: File = File(context.filesDir, "instances").also { it.mkdirs() }
 
     fun instanceDir(instanceId: String): File = File(instancesDir, instanceId)
@@ -99,6 +102,9 @@ class InstanceProvisioner @Inject constructor(@ApplicationContext private val co
                         if (!tmp.renameTo(target)) throw IOException("Could not finish writing $name")
                     }
                 }
+                if (identity == GRAPHENEOS) {
+                    grapheneApps.download(File(dir, "system-apps")) { onProgress(ProvisionProgress(1f, it)) }
+                }
                 Result.success(dir)
             } catch (e: Exception) {
                 dir.deleteRecursively()
@@ -120,6 +126,7 @@ class InstanceProvisioner @Inject constructor(@ApplicationContext private val co
 
     companion object {
         const val MANIFEST = "manifest.json"
+        const val GRAPHENEOS = "grapheneos"
         private val PAYLOAD = listOf("ramdisk.img", "vendor.img", "system.img")
         private const val BUFFER = 256 * 1024
         private const val REPORT_STEP = 4L * 1024 * 1024

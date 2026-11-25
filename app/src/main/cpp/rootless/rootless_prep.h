@@ -51,6 +51,9 @@ std::string props_64bit_only(const std::string& build_prop);
 struct DeviceIdentity {
     std::string brand, manufacturer, model, name, device, board, hardware;
     std::string build_id, incremental, fingerprint, description, flavor, build_host, build_product;
+    std::string build_user = "android-build";
+    std::string display_id; // ro.build.display.id, "" for build_id
+    std::string persona;    // guest_identity()'s, "" for Google's firmware
     std::string date, date_utc, security_patch, soc_manufacturer, soc_model;
     // androidboot.* the bootloader passes: ro.bootloader, ro.baseband, ro.revision
     std::string bootloader, baseband, revision;
